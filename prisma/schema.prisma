@@ -1,0 +1,553 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum UserRole {
+  CUSTOMER
+  SELLER
+  MANAGER
+  SUPER_ADMIN
+}
+
+enum ApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ENDED
+  CANCELLED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+  COMPLETED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+  EXPIRED
+}
+
+enum TicketStatus {
+  VALID
+  USED
+  EXPIRED
+  CANCELLED
+}
+
+enum WithdrawalMethodType {
+  BANK_ACCOUNT
+  MOBILE_MONEY
+  PAYPAL
+}
+
+enum WithdrawalStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TransactionType {
+  SALE
+  WITHDRAWAL
+  REFUND
+  ADJUSTMENT
+}
+
+enum NotificationType {
+  EMAIL
+  SMS
+  PUSH
+  IN_APP
+}
+
+// Main User model - Supports both Google OAuth and traditional auth
+model User {
+  id                      String              @id @default(cuid())
+  googleId                String?             @unique  // Optional for traditional auth
+  email                   String              @unique
+  password                String?             // For traditional auth (hashed)
+  firstName               String?
+  lastName                String?
+  phone                   String?
+  dateOfBirth             DateTime?
+  profilePicture          String?
+  role                    UserRole            @default(CUSTOMER)
+  applicationStatus       ApplicationStatus?  // For sellers
+  approvedBy              String?            // Reference to super admin who approved
+  approvedAt              DateTime?
+  
+  // Email verification
+  isEmailVerified         Boolean             @default(false)
+  emailVerificationToken  String?             @unique
+  emailVerifiedAt         DateTime?
+  
+  // Password reset
+  passwordResetToken      String?             @unique
+  passwordResetExpiry     DateTime?
+  
+  // Account status
+  isActive                Boolean             @default(true)
+  lastLoginAt             DateTime?
+  
+  // Timestamps
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  // Relations
+  sellerApplication     SellerApplication?
+  campaigns             TicketCampaign[]    @relation("SellerCampaigns")
+  managedCampaigns      TicketCampaign[]    @relation("ManagerCampaigns")
+  managers              Manager[]           @relation("SellerManagers")
+  managerAccount        Manager?            @relation("UserManager")
+  bookings              Booking[]
+  payments              Payment[]
+  tickets               Ticket[]
+  validations           TicketValidation[]
+  finance               Finance?
+  transactions          Transaction[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  withdrawalMethods     WithdrawalMethod[]
+
+  @@index([email])
+  @@index([role])
+  @@index([applicationStatus])
+  @@map("users")
+}
+
+// Seller Application for approval system
+model SellerApplication {
+  id                  String              @id @default(cuid())
+  userId              String              @unique
+  businessName        String
+  businessType        String
+  businessAddress     String
+  businessPhone       String
+  businessEmail       String
+  taxId               String?
+  businessDocuments   Json?               // Array of document URLs
+  description         String?
+  websiteUrl          String?
+  socialMediaHandles  Json?               // JSON object with platform links
+  status              ApplicationStatus   @default(PENDING)
+  reviewedBy          String?            // Super admin who reviewed
+  reviewNotes         String?
+  reviewedAt          DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Relations
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("seller_applications")
+}
+
+// Ticket Campaign with flexible ticket types
+model TicketCampaign {
+  id                  String              @id @default(cuid())
+  sellerId            String
+  title               String
+  description         String
+  eventType           String              // bar, sports, hotel, event, etc.
+  ticketTypes         Json                // JSONB for flexible ticket categories
+  // Example structure:
+  // {
+  //   "vip": { "price": 100, "quantity": 50, "description": "VIP Access" },
+  //   "general": { "price": 50, "quantity": 200, "description": "General Admission" },
+  //   "table": { "price": 500, "quantity": 10, "description": "Table for 8" }
+  // }
+  totalQuantity       Int
+  soldQuantity        Int                 @default(0)
+  maxPerCustomer      Int                 @default(10)
+  startDate           DateTime
+  endDate             DateTime
+  eventDate           DateTime
+  venue               String
+  venueAddress        String
+  venueCity           String
+  venueCountry        String
+  coverImage          String?
+  images              Json?               // Array of additional image URLs
+  status              CampaignStatus      @default(DRAFT)
+  isMultiScan         Boolean             @default(false)
+  maxScansPerTicket   Int                 @default(1)
+  tags                String[]            @default([])
+  metadata            Json?               // Additional campaign-specific data
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  seller              User                @relation("SellerCampaigns", fields: [sellerId], references: [id])
+  managers            User[]              @relation("ManagerCampaigns")
+  bookings            Booking[]
+  tickets             Ticket[]
+  validations         TicketValidation[]
+  analytics           CampaignAnalytics?
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([eventDate])
+  @@index([startDate, endDate])
+  @@map("ticket_campaigns")
+}
+
+// Manager accounts for validation
+model Manager {
+  id                  String              @id @default(cuid())
+  sellerId            String
+  userId              String?             @unique
+  name                String
+  email               String              @unique
+  password            String              // For validation app access
+  phone               String?
+  isActive            Boolean             @default(true)
+  permissions         Json?               // JSON array of specific permissions
+  lastActiveAt        DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  seller              User                @relation("SellerManagers", fields: [sellerId], references: [id])
+  user                User?               @relation("UserManager", fields: [userId], references: [id])
+  validations         TicketValidation[]
+
+  @@index([sellerId])
+  @@index([email])
+  @@index([isActive])
+  @@map("managers")
+}
+
+// Booking model
+model Booking {
+  id                  String              @id @default(cuid())
+  bookingRef          String              @unique @default(cuid())
+  customerId          String
+  campaignId          String
+  ticketType          String              // Key from campaign ticketTypes JSON
+  quantity            Int
+  unitPrice           Decimal             @db.Decimal(10, 2)
+  totalAmount         Decimal             @db.Decimal(10, 2)
+  issuanceType        String              @default("SEPARATE") // SINGLE or SEPARATE
+  status              BookingStatus       @default(PENDING)
+  paymentDeadline     DateTime
+  confirmedAt         DateTime?
+  cancelledAt         DateTime?
+  cancellationReason  String?
+  metadata            Json?               // Additional booking data
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  customer            User                @relation(fields: [customerId], references: [id])
+  campaign            TicketCampaign      @relation(fields: [campaignId], references: [id])
+  payment             Payment?
+  tickets             Ticket[]
+
+  @@index([customerId])
+  @@index([campaignId])
+  @@index([status])
+  @@index([bookingRef])
+  @@index([paymentDeadline])
+  @@map("bookings")
+}
+
+// Payment model for Flutterwave integration
+model Payment {
+  id                  String              @id @default(cuid())
+  bookingId           String              @unique
+  customerId          String
+  transactionRef      String              @unique
+  flutterwaveRef      String?             @unique
+  amount              Decimal             @db.Decimal(10, 2)
+  currency            String              @default("USD")
+  status              PaymentStatus       @default(PENDING)
+  paymentMethod       String?             // card, bank_transfer, mobile_money, etc.
+  paymentDetails      Json?               // Encrypted payment details
+  webhookData         Json?               // Raw webhook data from Flutterwave
+  verifiedAt          DateTime?
+  failureReason       String?
+  retryCount          Int                 @default(0)
+  lastRetryAt         DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  booking             Booking             @relation(fields: [bookingId], references: [id])
+  customer            User                @relation(fields: [customerId], references: [id])
+  transaction         Transaction?
+
+  @@index([customerId])
+  @@index([status])
+  @@index([transactionRef])
+  @@index([flutterwaveRef])
+  @@map("payments")
+}
+
+// Ticket model with QR code and PDF storage
+model Ticket {
+  id                  String              @id @default(cuid())
+  ticketNumber        String              @unique
+  bookingId           String
+  campaignId          String
+  customerId          String
+  ticketType          String
+  qrCode              String              @db.Text // Encrypted QR data
+  qrSecurityKey       String              // Security key for QR validation
+  pdfUrl              String?             // Cloudinary URL for PDF
+  status              TicketStatus        @default(VALID)
+  scanCount           Int                 @default(0)
+  maxScans            Int                 @default(1)
+  validFrom           DateTime
+  validUntil          DateTime
+  usedAt              DateTime?
+  metadata            Json?               // Additional ticket data
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  booking             Booking             @relation(fields: [bookingId], references: [id])
+  campaign            TicketCampaign      @relation(fields: [campaignId], references: [id])
+  customer            User                @relation(fields: [customerId], references: [id])
+  validations         TicketValidation[]
+
+  @@index([ticketNumber])
+  @@index([bookingId])
+  @@index([campaignId])
+  @@index([customerId])
+  @@index([status])
+  @@index([qrSecurityKey])
+  @@map("tickets")
+}
+
+// Ticket Validation logs
+model TicketValidation {
+  id                  String              @id @default(cuid())
+  ticketId            String
+  campaignId          String
+  validatedBy         String?             // Manager ID
+  validatedByUser     String?             // User ID if validated by seller
+  validationMethod    String              @default("QR_SCAN") // QR_SCAN, MANUAL, API
+  scanNumber          Int                 @default(1)
+  location            String?
+  ipAddress           String?
+  userAgent           String?
+  isValid             Boolean
+  failureReason       String?
+  metadata            Json?               // Additional validation data
+  createdAt           DateTime            @default(now())
+
+  // Relations
+  ticket              Ticket              @relation(fields: [ticketId], references: [id])
+  campaign            TicketCampaign      @relation(fields: [campaignId], references: [id])
+  manager             Manager?            @relation(fields: [validatedBy], references: [id])
+  user                User?               @relation(fields: [validatedByUser], references: [id])
+
+  @@index([ticketId])
+  @@index([campaignId])
+  @@index([validatedBy])
+  @@index([createdAt])
+  @@map("ticket_validations")
+}
+
+// Finance model for seller earnings
+model Finance {
+  id                  String              @id @default(cuid())
+  sellerId            String              @unique
+  totalEarnings       Decimal             @default(0) @db.Decimal(10, 2)
+  availableBalance    Decimal             @default(0) @db.Decimal(10, 2)
+  pendingBalance      Decimal             @default(0) @db.Decimal(10, 2)
+  withdrawnAmount     Decimal             @default(0) @db.Decimal(10, 2)
+  lastWithdrawalAt    DateTime?
+  currency            String              @default("USD")
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  seller              User                @relation(fields: [sellerId], references: [id])
+  withdrawals         Withdrawal[]
+  transactions        Transaction[]
+
+  @@index([sellerId])
+  @@map("finances")
+}
+
+// Withdrawal methods
+model WithdrawalMethod {
+  id                  String              @id @default(cuid())
+  userId              String
+  method              WithdrawalMethodType
+  accountName         String
+  accountNumber       String?             // Encrypted
+  bankName            String?
+  bankCode            String?
+  mobileProvider      String?
+  mobileNumber        String?             // Encrypted
+  paypalEmail         String?             // Encrypted
+  isVerified          Boolean             @default(false)
+  isDefault           Boolean             @default(false)
+  verifiedAt          DateTime?
+  metadata            Json?               // Additional method-specific data
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  user                User                @relation(fields: [userId], references: [id])
+  withdrawals         Withdrawal[]
+
+  @@index([userId])
+  @@index([method])
+  @@index([isDefault])
+  @@map("withdrawal_methods")
+}
+
+// Withdrawal requests
+model Withdrawal {
+  id                  String              @id @default(cuid())
+  financeId           String
+  methodId            String
+  amount              Decimal             @db.Decimal(10, 2)
+  fee                 Decimal             @default(0) @db.Decimal(10, 2)
+  netAmount           Decimal             @db.Decimal(10, 2)
+  status              WithdrawalStatus    @default(PENDING)
+  reference           String              @unique
+  processedAt         DateTime?
+  failureReason       String?
+  metadata            Json?               // Additional withdrawal data
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  finance             Finance             @relation(fields: [financeId], references: [id])
+  method              WithdrawalMethod    @relation(fields: [methodId], references: [id])
+
+  @@index([financeId])
+  @@index([status])
+  @@index([reference])
+  @@map("withdrawals")
+}
+
+// Transaction records
+model Transaction {
+  id                  String              @id @default(cuid())
+  financeId           String?
+  userId              String
+  paymentId           String?             @unique
+  type                TransactionType
+  amount              Decimal             @db.Decimal(10, 2)
+  balanceBefore       Decimal             @db.Decimal(10, 2)
+  balanceAfter        Decimal             @db.Decimal(10, 2)
+  reference           String              @unique
+  description         String
+  metadata            Json?               // Additional transaction data
+  createdAt           DateTime            @default(now())
+
+  // Relations
+  finance             Finance?            @relation(fields: [financeId], references: [id])
+  user                User                @relation(fields: [userId], references: [id])
+  payment             Payment?            @relation(fields: [paymentId], references: [id])
+
+  @@index([financeId])
+  @@index([userId])
+  @@index([type])
+  @@index([reference])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+// Campaign Analytics
+model CampaignAnalytics {
+  id                  String              @id @default(cuid())
+  campaignId          String              @unique
+  totalViews          Int                 @default(0)
+  uniqueViews         Int                 @default(0)
+  totalBookings       Int                 @default(0)
+  completedBookings   Int                 @default(0)
+  cancelledBookings   Int                 @default(0)
+  totalRevenue        Decimal             @default(0) @db.Decimal(10, 2)
+  averageTicketPrice  Decimal             @default(0) @db.Decimal(10, 2)
+  conversionRate      Float               @default(0)
+  peakBookingHour     Int?
+  topTicketType       String?
+  demographicsData    Json?               // Age groups, locations, etc.
+  lastCalculatedAt    DateTime            @default(now())
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  // Relations
+  campaign            TicketCampaign      @relation(fields: [campaignId], references: [id])
+
+  @@index([campaignId])
+  @@map("campaign_analytics")
+}
+
+// Notification model
+model Notification {
+  id                  String              @id @default(cuid())
+  userId              String
+  type                NotificationType
+  title               String
+  message             String              @db.Text
+  data                Json?               // Additional notification data
+  isRead              Boolean             @default(false)
+  readAt              DateTime?
+  sentAt              DateTime            @default(now())
+  createdAt           DateTime            @default(now())
+
+  // Relations
+  user                User                @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// Audit Log for security monitoring
+model AuditLog {
+  id                  String              @id @default(cuid())
+  userId              String?
+  action              String
+  entity              String
+  entityId            String?
+  changes             Json?               // Before and after values
+  ipAddress           String?
+  userAgent           String?
+  sessionId           String?
+  metadata            Json?               // Additional audit data
+  createdAt           DateTime            @default(now())
+
+  // Relations
+  user                User?               @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entity])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

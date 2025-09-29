@@ -1,0 +1,38 @@
+# Development override for docker-compose
+# This file is automatically loaded when running docker-compose in development
+version: '3.8'
+
+services:
+  api:
+    build:
+      target: development
+    environment:
+      - NODE_ENV=development
+      - DEBUG=ticketing:*
+    ports:
+      - "3001:3000"
+      - "9229:9229"  # Debug port for Node.js
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["npm", "run", "dev"]
+
+  workers:
+    build:
+      target: development
+    environment:
+      - NODE_ENV=development
+      - DEBUG=ticketing:*
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: ["npm", "run", "worker:dev"]
+
+  # Add a development database with seeded data
+  postgres:
+    environment:
+      POSTGRES_USER: ticketing_dev
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: ticketing_marketplace_dev
+    volumes:
+      - ./database/seeds:/docker-entrypoint-initdb.d
