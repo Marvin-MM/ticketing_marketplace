@@ -3,7 +3,6 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
-import session from 'express-session';
 import passport from 'passport';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -43,24 +42,25 @@ const io = new Server(server, {
 app.set('trust proxy', 1);
 
 // Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https:'],
-    },
-  },
-}));
+// app.use(helmet({
+//   contentSecurityPolicy: {
+//     directives: {
+//       defaultSrc: ["'self'"],
+//       styleSrc: ["'self'", "'unsafe-inline'"],
+//       scriptSrc: ["'self'"],
+//       imgSrc: ["'self'", 'data:', 'https:'],
+//     },
+//   },
+// }));
 
 // CORS configuration
-app.use(cors({
-  origin: config.security.corsOrigin,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-}));
+// app.use(cors({
+//   origin: config.security.corsOrigin,
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+// }));
+app.use(cors());
 
 // Compression middleware
 app.use(compression());
@@ -70,22 +70,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Session configuration
-app.use(session({
-  secret: config.auth.session.secret,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: config.app.isProduction,
-    httpOnly: true,
-    maxAge: config.auth.session.maxAge,
-    sameSite: 'lax',
-  },
-}));
-
-// Initialize Passport
+// Initialize Passport (for Google OAuth only)
 app.use(passport.initialize());
-app.use(passport.session());
 
 // Rate limiting
 const generalLimiter = rateLimit({

@@ -486,9 +486,9 @@ class BookingService {
     }
 
     const now = new Date();
-    if (now < campaign.startDate || now > campaign.endDate) {
+/*     if (now < campaign.startDate || now > campaign.endDate) {
       throw new BookingError('Campaign is not available for booking');
-    }
+    } */
 
     if (campaign.eventDate < now) {
       throw new BookingError('Event has already occurred');
@@ -666,15 +666,15 @@ class BookingService {
       bookingRef: booking.bookingRef,
       customerId: userId,
       amount: booking.totalAmount,
-      currency: 'USD'
+      currency: 'UGX'
     });
 
     // Send booking confirmation email
-    await emailQueue.sendBookingCreated({
-      bookingId: booking.id,
-      bookingRef: booking.bookingRef,
-      paymentDeadline: booking.paymentDeadline
-    });
+    // await emailQueue.sendBookingCreated({
+    //   bookingId: booking.id,
+    //   bookingRef: booking.bookingRef,
+    //   paymentDeadline: booking.paymentDeadline
+    // });
 
     logger.info('Booking created successfully', {
       bookingId: booking.id,

@@ -319,3 +319,104 @@ export const sendPaymentNotificationEmail = async (paymentData) => {
     throw error;
   }
 };
+
+/**
+ * Send invitation email
+ */
+export const sendManagerInvitationEmail = async (userData) => {
+  const { email, name, invitationToken, sellerName } = userData;
+
+  const subject = `Manager Invitation - Join ${config.app.name}`;
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Manager Invitation - ${config.app.name}</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+        .header { background: #059669; color: white; padding: 30px 20px; text-align: center; }
+        .content { padding: 30px 20px; background: #f9f9f9; }
+        .footer { background: #374151; color: white; padding: 20px; text-align: center; font-size: 14px; }
+        .button { 
+          display: inline-block; 
+          background: #059669; 
+          color: white; 
+          padding: 12px 30px; 
+          text-decoration: none; 
+          border-radius: 5px; 
+          font-weight: bold;
+          margin: 20px 0;
+        }
+        .details { background: white; padding: 20px; border-radius: 5px; margin: 20px 0; }
+        .expiry-note { color: #dc2626; font-size: 14px; margin-top: 10px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>${config.app.name}</h1>
+          <h2>Manager Invitation</h2>
+        </div>
+        
+        <div class="content">
+          <h3>Hello ${name},</h3>
+          
+          <p>You have been invited by <strong>${sellerName}</strong> to become a manager on ${config.app.name}.</p>
+          
+          <div class="details">
+            <p><strong>Your Role:</strong> Campaign Manager</p>
+            <p><strong>Invited by:</strong> ${sellerName}</p>
+            <p><strong>Platform:</strong> ${config.app.name}</p>
+          </div>
+          
+          <p>As a manager, you'll be able to help manage campaigns, view analytics, and handle ticket operations.</p>
+          
+          <div style="text-align: center;">
+            <a href="${config.app.url}/auth/accept-invitation?token=${invitationToken}" class="button">
+              Accept Invitation
+            </a>
+          </div>
+          
+          <p class="expiry-note">
+            ⚠️ This invitation link will expire in 24 hours.
+          </p>
+          
+          <p>If the button doesn't work, copy and paste this link in your browser:</p>
+          <p style="word-break: break-all; background: #f5f5f5; padding: 10px; border-radius: 3px;">
+            ${config.app.url}/auth/accept-invitation?token=${invitationToken}
+          </p>
+        </div>
+        
+        <div class="footer">
+          <p>&copy; 2024 ${config.app.name}. All rights reserved.</p>
+          <p>Need help? Contact support: ${config.email.support || 'support@ticketingmarketplace.com'}</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: config.email.from,
+      to: email,
+      subject,
+      html: htmlContent,
+    });
+
+    logger.info('Manager invitation email sent successfully', { 
+      email, 
+      managerName: name,
+      sellerName 
+    });
+    
+  } catch (error) {
+    logger.error('Failed to send manager invitation email:', { 
+      email, 
+      error: error.message 
+    });
+    throw error;
+  }
+}; 

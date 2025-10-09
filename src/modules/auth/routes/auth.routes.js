@@ -14,10 +14,12 @@ import {
   changePassword,
   googleCallback,
   logout,
-  applySeller,
+  applySellerNewUser,
   applicationStatus,
   approveSeller,
+  applySellerExistingUser,
   createManager,
+  acceptManagerInvitation,
   deactivateManager,
   profile,
 } from '../controllers/auth.controller.js';
@@ -30,7 +32,9 @@ import {
   resetPasswordSchema,
   changePasswordSchema,
   sellerApplicationSchema,
+  existingUserSellerApplicationSchema,
   createManagerSchema,
+  acceptInvitationSchema,
   reviewApplicationSchema,
 } from '../validation/auth.validation.js';
 
@@ -58,12 +62,14 @@ router.get('/google/callback', googleCallback);
 router.post('/logout', ensureAuthenticated, asyncHandler(logout));
 
 // Seller application routes
-router.post('/apply-seller', ensureAuthenticated, validateRequest(sellerApplicationSchema), asyncHandler(applySeller));
+router.post('/apply-seller', validateRequest(sellerApplicationSchema), asyncHandler(applySellerNewUser));
+router.post('/seller-application', ensureAuthenticated, validateRequest(existingUserSellerApplicationSchema), asyncHandler(applySellerExistingUser));
 router.get('/application-status', ensureAuthenticated, asyncHandler(applicationStatus));
 router.post('/approve-seller/:applicationId', ensureRoles('SUPER_ADMIN'), validateRequest(reviewApplicationSchema), asyncHandler(approveSeller));
 
 // Manager management routes
 router.post('/create-manager', ensureRoles('SELLER'), validateRequest(createManagerSchema), asyncHandler(createManager));
+router.post('/accept-invitation', validateRequest(acceptInvitationSchema), asyncHandler(acceptManagerInvitation));
 router.post('/deactivate-manager/:managerId', ensureRoles('SELLER'), asyncHandler(deactivateManager));
 
 // Profile route

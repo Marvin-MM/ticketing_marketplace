@@ -14,7 +14,7 @@ import {
 /**
  * Enhanced Finance Service with comprehensive financial management
  */
-class FinanceService {
+class financeService {
   /**
    * Get comprehensive financial dashboard for seller
    */
@@ -682,4 +682,4 @@ class FinanceService {
   }
 }
 
-export default new FinanceService();
+export default new financeService();

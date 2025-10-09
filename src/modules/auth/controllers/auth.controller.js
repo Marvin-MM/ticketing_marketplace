@@ -1,6 +1,7 @@
 import passport from 'passport';
 import bcrypt from 'bcryptjs';
 import prisma from '../../../config/database.js';
+import config from '../../../config/index.js';
 import logger from '../../../config/logger.js';
 import { emailQueue } from '../../../config/rabbitmq.js';
 import { 
@@ -12,12 +13,13 @@ import {
 } from '../../../shared/errors/AppError.js';
 import { hashPassword, generateSecureToken } from '../../../shared/utils/encryption.js';
 import { 
-  generateTokens, 
-  verifyToken, 
   generateVerificationToken, 
   generatePasswordResetToken, 
-  verifySpecialToken 
-} from '../../../shared/utils/jwt.js';
+  verifySpecialToken,
+  extractRefreshTokenFromCookie 
+} from '../../../shared/utils/token.utils.js';
+import { createSession, refreshSession, destroySession } from '../../../shared/utils/session.js';
+import { setAuthCookies, clearAuthCookies } from '../../../shared/utils/cookies.js';
 
 /**
  * Register new user with email/password
@@ -62,8 +64,11 @@ export const register = async (req, res) => {
     },
   });
 
-  // Generate JWT tokens
-  const tokens = generateTokens(user);
+  // Create session in Redis
+  const { sessionId, refreshTokenId } = await createSession(user, false);
+
+  // Set secure HTTP-only cookies
+  setAuthCookies(res, sessionId, refreshTokenId, false);
 
   // Send verification email
   await emailQueue.sendWelcome({
@@ -106,7 +111,6 @@ export const register = async (req, res) => {
         role: user.role,
         isEmailVerified: user.isEmailVerified,
       },
-      ...tokens,
     },
   });
 };
@@ -145,14 +149,18 @@ export const login = async (req, res) => {
     data: { lastLoginAt: new Date() },
   });
 
-  // Generate tokens
-  const tokens = generateTokens(user);
+  // Create session in Redis
+  const { sessionId, refreshTokenId } = await createSession(user, rememberMe);
+
+  // Set secure HTTP-only cookies
+  setAuthCookies(res, sessionId, refreshTokenId, rememberMe);
 
   // Log successful login
   logger.info('User logged in successfully', { 
     userId: user.id, 
     email: user.email,
-    ip: req.ip 
+    ip: req.ip,
+    rememberMe 
   });
 
   res.status(200).json({
@@ -168,30 +176,31 @@ export const login = async (req, res) => {
         isEmailVerified: user.isEmailVerified,
         applicationStatus: user.applicationStatus,
       },
-      ...tokens,
     },
   });
 };
 
 /**
- * Refresh JWT token
+ * Refresh session using refresh token from cookie
  */
 export const refreshToken = async (req, res) => {
-  const { refreshToken } = req.body;
+  // Extract refresh token from cookie
+  const refreshTokenId = extractRefreshTokenFromCookie(req);
 
-  if (!refreshToken) {
+  if (!refreshTokenId) {
     throw new AuthenticationError('Refresh token is required');
   }
 
-  // Verify refresh token
-  const tokenResult = verifyToken(refreshToken, true);
-  if (!tokenResult.valid) {
-    throw new AuthenticationError('Invalid refresh token');
+  // Refresh session in Redis
+  const result = await refreshSession(refreshTokenId);
+  
+  if (!result) {
+    throw new AuthenticationError('Invalid or expired refresh token');
   }
 
-  // Get user
+  // Get user data
   const user = await prisma.user.findUnique({
-    where: { id: tokenResult.payload.id },
+    where: { id: result.userId },
     select: {
       id: true,
       email: true,
@@ -208,15 +217,17 @@ export const refreshToken = async (req, res) => {
     throw new AuthenticationError('User not found or inactive');
   }
 
-  // Generate new tokens
-  const newTokens = generateTokens(user);
+  // Set new session cookie (refresh token stays the same)
+  const { setSessionCookie } = await import('../../../shared/utils/cookies.js');
+  setSessionCookie(res, result.sessionId);
+
+  logger.info('Session refreshed', { userId: user.id });
 
   res.status(200).json({
     success: true,
-    message: 'Tokens refreshed successfully',
+    message: 'Session refreshed successfully',
     data: {
       user,
-      ...newTokens,
     },
   });
 };
@@ -439,66 +450,167 @@ export const changePassword = async (req, res) => {
 /**
  * Google OAuth callback handler
  */
-export const googleCallback = (req, res, next) => {
-  passport.authenticate('google', {
-    failureRedirect: '/auth/login',
-    successRedirect: process.env.FRONTEND_URL || '/',
+export const googleCallback = async (req, res, next) => {
+  passport.authenticate('google', async (err, user, info) => {
+    if (err) {
+      logger.error('Google OAuth error:', err);
+      return res.redirect(`${config.app.frontendUrl}/auth/login?error=oauth_failed`);
+    }
+
+    if (!user) {
+      return res.redirect(`${config.app.frontendUrl}/auth/login?error=no_user`);
+    }
+
+    try {
+      // Create session in Redis
+      const { sessionId, refreshTokenId } = await createSession(user, false);
+
+      // Set secure HTTP-only cookies
+      setAuthCookies(res, sessionId, refreshTokenId, false);
+
+      logger.info('User logged in via Google OAuth', { userId: user.id });
+
+      // Redirect to frontend
+      res.redirect(config.app.frontendUrl);
+    } catch (error) {
+      logger.error('Error creating session after OAuth:', error);
+      res.redirect(`${config.app.frontendUrl}/auth/login?error=session_failed`);
+    }
   })(req, res, next);
 };
 
 /**
- * Logout handler
+ * Logout handler - destroy session and clear cookies
  */
-export const logout = (req, res) => {
+export const logout = async (req, res) => {
   const userId = req.user?.id;
+  const sessionId = req.sessionId;
+  const refreshTokenId = req.sessionData?.refreshTokenId;
   
-  req.logout((err) => {
-    if (err) {
-      logger.error('Logout error:', err);
-    }
-    
-    req.session.destroy((err) => {
-      if (err) {
-        logger.error('Session destroy error:', err);
-      }
-      
-      res.clearCookie('connect.sid');
-      
-      logger.info('User logged out', { userId });
-      
-      res.status(200).json({
-        success: true,
-        message: 'Logged out successfully',
-      });
-    });
+  // Destroy session in Redis
+  await destroySession(sessionId, refreshTokenId);
+  
+  // Clear auth cookies
+  clearAuthCookies(res);
+  
+  logger.info('User logged out', { userId });
+  
+  res.status(200).json({
+    success: true,
+    message: 'Logged out successfully',
   });
 };
 
 /**
  * Apply for seller account
  */
-export const applySeller = async (req, res) => {
-  const { 
-    businessName,
-    businessType,
-    businessAddress,
-    businessPhone,
-    businessEmail,
-    taxId,
-    businessDocuments,
-    description,
-    websiteUrl,
-    socialMediaHandles
-  } = req.body;
+// export const applySeller = async (req, res) => {
+//   const { 
+//     businessName,
+//     businessType,
+//     businessAddress,
+//     businessPhone,
+//     businessEmail,
+//     taxId,
+//     businessDocuments,
+//     description,
+//     websiteUrl,
+//     socialMediaHandles
+//   } = req.body;
 
-  const userId = req.user.id;
+//   const userId = req.user.id;
 
-  // Validate required fields
-  if (!businessName || !businessType || !businessAddress || !businessPhone || !businessEmail) {
-    throw new ValidationError('Missing required business information');
-  }
+//   // Validate required fields
+//   if (!businessName || !businessType || !businessAddress || !businessPhone || !businessEmail) {
+//     throw new ValidationError('Missing required business information');
+//   }
 
-  // Check if user already has a pending application
+//   // Check if user already has a pending application
+//   const existingApplication = await prisma.sellerApplication.findUnique({
+//     where: { userId },
+//   });
+
+//   if (existingApplication) {
+//     if (existingApplication.status === 'PENDING') {
+//       throw new ConflictError('You already have a pending seller application');
+//     }
+//     if (existingApplication.status === 'APPROVED') {
+//       throw new ConflictError('Your seller application has already been approved');
+//     }
+//   }
+
+//   // Create or update seller application
+//   const application = await prisma.sellerApplication.upsert({
+//     where: { userId },
+//     update: {
+//       businessName,
+//       businessType,
+//       businessAddress,
+//       businessPhone,
+//       businessEmail,
+//       taxId,
+//       businessDocuments,
+//       description,
+//       websiteUrl,
+//       socialMediaHandles,
+//       status: 'PENDING',
+//       reviewedBy: null,
+//       reviewNotes: null,
+//       reviewedAt: null,
+//     },
+//     create: {
+//       userId,
+//       businessName,
+//       businessType,
+//       businessAddress,
+//       businessPhone,
+//       businessEmail,
+//       taxId,
+//       businessDocuments,
+//       description,
+//       websiteUrl,
+//       socialMediaHandles,
+//       status: 'PENDING',
+//     },
+//   });
+
+//   // Update user application status
+//   await prisma.user.update({
+//     where: { id: userId },
+//     data: { applicationStatus: 'PENDING' },
+//   });
+
+//   // Log audit event
+//   await prisma.auditLog.create({
+//     data: {
+//       userId,
+//       action: 'SELLER_APPLICATION_SUBMITTED',
+//       entity: 'SellerApplication',
+//       entityId: application.id,
+//       metadata: { businessName, businessType },
+//     },
+//   });
+
+//   logger.info('Seller application submitted', { userId, applicationId: application.id });
+
+//   res.status(201).json({
+//     success: true,
+//     message: 'Seller application submitted successfully',
+//     data: {
+//       applicationId: application.id,
+//       status: application.status,
+//     },
+//   });
+// };
+
+/**
+ * Handles seller application for an existing, authenticated user.
+ */
+export const applySellerExistingUser = async (req, res) => {
+  const userId = req.user.id; // Get user ID securely from the session
+  const businessData = req.body;
+
+  // Check if user already has a pending or approved application
   const existingApplication = await prisma.sellerApplication.findUnique({
     where: { userId },
   });
@@ -512,66 +624,125 @@ export const applySeller = async (req, res) => {
     }
   }
 
-  // Create or update seller application
+  // Create a new seller application (or update if one was previously rejected)
   const application = await prisma.sellerApplication.upsert({
     where: { userId },
-    update: {
-      businessName,
-      businessType,
-      businessAddress,
-      businessPhone,
-      businessEmail,
-      taxId,
-      businessDocuments,
-      description,
-      websiteUrl,
-      socialMediaHandles,
-      status: 'PENDING',
-      reviewedBy: null,
-      reviewNotes: null,
-      reviewedAt: null,
-    },
-    create: {
-      userId,
-      businessName,
-      businessType,
-      businessAddress,
-      businessPhone,
-      businessEmail,
-      taxId,
-      businessDocuments,
-      description,
-      websiteUrl,
-      socialMediaHandles,
-      status: 'PENDING',
-    },
+    update: { ...businessData, status: 'PENDING', reviewedAt: null, reviewNotes: null },
+    create: { userId, ...businessData, status: 'PENDING' },
   });
 
-  // Update user application status
+  // Update the user's application status
   await prisma.user.update({
     where: { id: userId },
     data: { applicationStatus: 'PENDING' },
   });
 
-  // Log audit event
+  // Log the audit event
   await prisma.auditLog.create({
     data: {
       userId,
       action: 'SELLER_APPLICATION_SUBMITTED',
       entity: 'SellerApplication',
       entityId: application.id,
-      metadata: { businessName, businessType },
+      metadata: { businessName: businessData.businessName, isNewUser: false },
     },
   });
 
-  logger.info('Seller application submitted', { userId, applicationId: application.id });
+  logger.info('Seller application submitted by existing user', { 
+    userId, 
+    applicationId: application.id 
+  });
 
   res.status(201).json({
     success: true,
-    message: 'Seller application submitted successfully',
+    message: 'Your seller application has been submitted successfully',
     data: {
       applicationId: application.id,
       status: application.status,
+    },
+  });
+};
+
+/**
+ * Handles registration and seller application for a NEW user.
+ */
+export const applySellerNewUser = async (req, res) => {
+  const { 
+    businessName, businessType, businessAddress, businessPhone, businessEmail, 
+    taxId, businessDocuments, description, websiteUrl, socialMediaHandles,
+    email, password, firstName, lastName, phone, dateOfBirth
+  } = req.body;
+
+  // Validate required fields (can be handled by Joi validation middleware)
+
+  // Check if user already exists
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) {
+    // Force existing users to log in and use the correct endpoint
+    throw new ConflictError('An account with this email already exists. Please log in and apply from your dashboard.');
+  }
+
+  // --- Create new user account (since user does not exist) ---
+  const hashedPassword = await bcrypt.hash(password, 12);
+  const verificationToken = generateSecureToken(32);
+
+  const newUser = await prisma.user.create({
+    data: {
+      email,
+      password: hashedPassword,
+      firstName,
+      lastName,
+      role: 'CUSTOMER', // User starts as a customer
+      applicationStatus: 'PENDING',
+      phone: phone || businessPhone,
+      dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+      emailVerificationToken: verificationToken,
+      isEmailVerified: false,
+      isActive: true,
+    },
+  });
+
+  // Create the seller application associated with the new user
+  const application = await prisma.sellerApplication.create({
+    data: {
+      userId: newUser.id,
+      businessName, businessType, businessAddress, businessPhone, businessEmail,
+      taxId, businessDocuments, description, websiteUrl, socialMediaHandles,
+      status: 'PENDING',
+    },
+  });
+
+  // --- Post-creation tasks (email, logging) ---
+  await emailQueue.sendWelcome({
+    email: newUser.email,
+    firstName: newUser.firstName,
+    verificationToken,
+    type: 'EMAIL_VERIFICATION',
+  });
+  
+  await prisma.auditLog.create({
+    data: {
+      userId: newUser.id,
+      action: 'SELLER_APPLICATION_WITH_REGISTRATION',
+      entity: 'User',
+      entityId: newUser.id,
+    },
+  });
+
+  logger.info('New user registered via seller application', { userId: newUser.id });
+
+  res.status(201).json({
+    success: true,
+    message: 'Registration and application submitted successfully. Please check your email for verification.',
+    data: {
+      applicationId: application.id,
+      status: application.status,
+      userCreated: true,
+      user: {
+        id: newUser.id,
+        email: newUser.email,
+        role: 'CUSTOMER',
+      },
     },
   });
 };
@@ -714,63 +885,127 @@ export const approveSeller = async (req, res) => {
 /**
  * Create manager account (Seller only)
  */
+// export const createManager = async (req, res) => {
+//   const { name, email, password, phone, permissions } = req.body;
+//   const sellerId = req.user.id;
+
+//   // Validate required fields
+//   if (!name || !email || !password) {
+//     throw new ValidationError('Name, email, and password are required');
+//   }
+
+//   // Check if email is already in use
+//   const existingManager = await prisma.manager.findUnique({
+//     where: { email },
+//   });
+
+//   if (existingManager) {
+//     throw new ConflictError('Email is already registered as a manager');
+//   }
+
+//   // Hash password
+//   const hashedPassword = hashPassword(password);
+
+//   // Create manager
+//   const manager = await prisma.manager.create({
+//     data: {
+//       sellerId,
+//       name,
+//       email,
+//       password: hashedPassword,
+//       phone,
+//       permissions: permissions || [],
+//     },
+//   });
+
+//   // Send email to manager with login details
+//   await emailQueue.sendWelcome({
+//     email,
+//     name,
+//     type: 'MANAGER',
+//     sellerId,
+//   });
+
+//   // Log audit event
+//   await prisma.auditLog.create({
+//     data: {
+//       userId: sellerId,
+//       action: 'MANAGER_CREATED',
+//       entity: 'Manager',
+//       entityId: manager.id,
+//       metadata: { managerEmail: email, managerName: name },
+//     },
+//   });
+
+//   logger.info('Manager created', { managerId: manager.id, sellerId });
+
+//   res.status(201).json({
+//     success: true,
+//     message: 'Manager created successfully',
+//     data: {
+//       managerId: manager.id,
+//       name: manager.name,
+//       email: manager.email,
+//     },
+//   });
+// };
+
 export const createManager = async (req, res) => {
-  const { name, email, password, phone, permissions } = req.body;
+  const { name, email, phone, permissions } = req.body;
   const sellerId = req.user.id;
 
-  // Validate required fields
-  if (!name || !email || !password) {
-    throw new ValidationError('Name, email, and password are required');
+  if (!name || !email) {
+    throw new ValidationError('Name and email are required');
   }
 
-  // Check if email is already in use
-  const existingManager = await prisma.manager.findUnique({
-    where: { email },
-  });
-
+  const existingManager = await prisma.manager.findUnique({ where: { email } });
   if (existingManager) {
     throw new ConflictError('Email is already registered as a manager');
   }
 
-  // Hash password
-  const hashedPassword = hashPassword(password);
+  // Generate invitation token
+  const invitationToken = generateSecureToken(32);
+  const invitationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours to accept
 
-  // Create manager
+  // Create an inactive manager with an invitation token
   const manager = await prisma.manager.create({
     data: {
       sellerId,
       name,
       email,
-      password: hashedPassword,
       phone,
       permissions: permissions || [],
+      isActive: false,
+      invitationToken,
+      invitationExpiry,
     },
   });
 
-  // Send email to manager with login details
-  await emailQueue.sendWelcome({
-    email,
-    name,
-    type: 'MANAGER',
-    sellerId,
+  // Send invitation email via RabbitMQ
+  await emailQueue.sendManagerInvitation({
+    email: manager.email,
+    name: manager.name,
+    invitationToken,
+    sellerName: req.user.firstName,
+    // type: 'MANAGER_INVITATION',
   });
 
   // Log audit event
   await prisma.auditLog.create({
     data: {
       userId: sellerId,
-      action: 'MANAGER_CREATED',
+      action: 'MANAGER_INVITED',
       entity: 'Manager',
       entityId: manager.id,
       metadata: { managerEmail: email, managerName: name },
     },
   });
 
-  logger.info('Manager created', { managerId: manager.id, sellerId });
+  logger.info('Manager invited', { managerId: manager.id, sellerId });
 
   res.status(201).json({
     success: true,
-    message: 'Manager created successfully',
+    message: 'Manager invitation sent successfully',
     data: {
       managerId: manager.id,
       name: manager.name,
@@ -778,6 +1013,46 @@ export const createManager = async (req, res) => {
     },
   });
 };
+
+/**
+ * Accept Manager Invitation (New Controller)
+ */
+export const acceptManagerInvitation = async (req, res) => {
+  const { token, password } = req.body;
+
+  // Find manager by token and check expiry
+  const manager = await prisma.manager.findFirst({
+    where: {
+      invitationToken: token,
+      invitationExpiry: { gt: new Date() },
+    },
+  });
+
+  if (!manager) {
+    throw new ValidationError('Invalid or expired invitation token');
+  }
+
+  // Hash the password and activate the manager
+  const hashedPassword = await hashPassword(password);
+
+  await prisma.manager.update({
+    where: { id: manager.id },
+    data: {
+      password: hashedPassword,
+      isActive: true,
+      invitationToken: null, // Nullify token after use
+      invitationExpiry: null,
+    },
+  });
+
+  logger.info('Manager account activated', { managerId: manager.id, email: manager.email });
+
+  res.status(200).json({
+    success: true,
+    message: 'Account activated successfully. You can now log in.',
+  });
+};
+
 
 /**
  * Deactivate manager (Seller only)

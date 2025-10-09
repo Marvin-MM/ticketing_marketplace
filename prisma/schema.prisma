@@ -223,11 +223,16 @@ model Manager {
   userId              String?             @unique
   name                String
   email               String              @unique
-  password            String              // For validation app access
+  password            String?              // For validation app access
   phone               String?
-  isActive            Boolean             @default(true)
+  isActive            Boolean             @default(false)
   permissions         Json?               // JSON array of specific permissions
   lastActiveAt        DateTime?
+
+  // New fields for invitation flow
+  invitationToken     String?             @unique
+  invitationExpiry    DateTime?
+
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -486,6 +491,7 @@ model CampaignAnalytics {
   totalViews          Int                 @default(0)
   uniqueViews         Int                 @default(0)
   totalBookings       Int                 @default(0)
+  pendingBookings     Int                 @default(0)
   completedBookings   Int                 @default(0)
   cancelledBookings   Int                 @default(0)
   totalRevenue        Decimal             @default(0) @db.Decimal(10, 2)

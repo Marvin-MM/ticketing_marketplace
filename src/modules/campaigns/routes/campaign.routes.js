@@ -41,7 +41,7 @@ router.patch('/:campaignId/status', ensureApprovedSeller, asyncHandler(updateCam
 router.post('/:campaignId/managers', ensureApprovedSeller, asyncHandler(assignManagers));
 router.delete('/:campaignId', ensureApprovedSeller, asyncHandler(deleteCampaign));
 
-// // Image upload routes
+// // Image upload routes 
 // router.post('/:campaignId/cover-image', ensureApprovedSeller, upload.single('coverImage'), asyncHandler(uploadCoverImage));
 // router.post('/:campaignId/gallery-images', ensureApprovedSeller, upload.array('galleryImages', 10), asyncHandler(uploadGalleryImages));
 router.delete('/:campaignId/images/:imageType', ensureApprovedSeller, asyncHandler(deleteImage));

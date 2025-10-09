@@ -13,6 +13,8 @@ export const QUEUES = {
   FINANCE_UPDATES: `${config.rabbitmq.queuePrefix}finance`,
   NOTIFICATIONS: `${config.rabbitmq.queuePrefix}notifications`,
   ANALYTICS: `${config.rabbitmq.queuePrefix}analytics`,
+  BOOKING_CONFIRMATION: `${config.rabbitmq.queuePrefix}booking_confirmation`,
+  DEAD_LETTER: `${config.rabbitmq.queuePrefix}dead_letter`, // Queue for failed jobs
 };
 
 // Exchange configuration
@@ -25,6 +27,7 @@ export const ROUTING_KEYS = {
   EMAIL_WELCOME: 'email.welcome',
   EMAIL_BOOKING: 'email.booking',
   EMAIL_PAYMENT: 'email.payment',
+  EMAIL_MANAGER_INVITATION: 'email.manager.invitation',
   PDF_TICKET: 'pdf.ticket',
   PDF_INVOICE: 'pdf.invoice',
   PAYMENT_PROCESS: 'payment.process',
@@ -32,6 +35,7 @@ export const ROUTING_KEYS = {
   FINANCE_CALCULATE: 'finance.calculate',
   FINANCE_WITHDRAWAL: 'finance.withdrawal',
   NOTIFICATION_PUSH: 'notification.push',
+  BOOKING_CONFIRM: 'booking.confirm',
   ANALYTICS_UPDATE: 'analytics.update',
 };
 
@@ -51,26 +55,38 @@ export const connect = async () => {
     // Set prefetch count for fair dispatch
     await channel.prefetch(1);
     
-    // Assert exchange
+    // Assert main exchange
     await channel.assertExchange(EXCHANGE, EXCHANGE_TYPE, { durable: true });
+
+    // Set up the Dead-Letter Exchange (DLX) infrastructure
+    const DLX_EXCHANGE = `${EXCHANGE}_dlx`;
+    const DLX_ROUTING_KEY = 'failed';
+    await channel.assertExchange(DLX_EXCHANGE, 'direct', { durable: true });
+    await channel.assertQueue(QUEUES.DEAD_LETTER, { durable: true });
+    await channel.bindQueue(QUEUES.DEAD_LETTER, DLX_EXCHANGE, DLX_ROUTING_KEY);
     
-    // Assert all queues
+    // Assert all main queues and link them to the DLX
     for (const queueName of Object.values(QUEUES)) {
+      // The dead-letter queue itself doesn't need a DLX
+      if (queueName === QUEUES.DEAD_LETTER) continue; 
+      
       await channel.assertQueue(queueName, {
         durable: true,
         arguments: {
           'x-message-ttl': 86400000, // 24 hours
-          'x-max-retries': 3,
+          'x-dead-letter-exchange': DLX_EXCHANGE,
+          'x-dead-letter-routing-key': DLX_ROUTING_KEY,
         },
       });
     }
     
     // Bind queues to exchange with routing keys
-    await channel.bindQueue(QUEUES.EMAIL, EXCHANGE, 'email.*');
+    await channel.bindQueue(QUEUES.EMAIL, EXCHANGE, 'email.#');
     await channel.bindQueue(QUEUES.PDF_GENERATION, EXCHANGE, 'pdf.*');
     await channel.bindQueue(QUEUES.PAYMENT_PROCESSING, EXCHANGE, 'payment.*');
     await channel.bindQueue(QUEUES.FINANCE_UPDATES, EXCHANGE, 'finance.*');
     await channel.bindQueue(QUEUES.NOTIFICATIONS, EXCHANGE, 'notification.*');
+    await channel.bindQueue(QUEUES.BOOKING_CONFIRMATION, EXCHANGE, 'booking.*');
     await channel.bindQueue(QUEUES.ANALYTICS, EXCHANGE, 'analytics.*');
     
     // Handle connection events
@@ -157,16 +173,20 @@ export const consumeQueue = async (queueName, handler, options = {}) => {
           // Process message
           await handler(content, message);
           
-          // Acknowledge message
+          // Acknowledge message on success
           channel.ack(message);
           
           logger.debug('Message processed successfully', { queueName, content });
         } catch (error) {
-          logger.error('Error processing message:', error);
+          logger.error('Error processing message:', { 
+            error: error.message, 
+            queueName, 
+            retryCount 
+          });
           
           // Check retry limit
           if (retryCount < 3) {
-            // Requeue with incremented retry count
+            // Re-publish the message for a delayed retry
             const retryOptions = {
               ...message.properties,
               headers: {
@@ -175,7 +195,6 @@ export const consumeQueue = async (queueName, handler, options = {}) => {
               },
             };
             
-            // Republish to the same queue with delay
             setTimeout(() => {
               channel.sendToQueue(
                 queueName,
@@ -184,19 +203,14 @@ export const consumeQueue = async (queueName, handler, options = {}) => {
               );
             }, Math.pow(2, retryCount) * 1000); // Exponential backoff
             
-            // Acknowledge the original message
+            // Acknowledge the original message so it's removed from the queue
             channel.ack(message);
           } else {
-            // Send to dead letter queue
-            await publishMessage('dlq.failed', {
-              originalQueue: queueName,
-              content,
-              error: error.message,
-              retryCount,
-            });
-            
-            // Acknowledge and don't requeue
-            channel.ack(message);
+            // After max retries, reject the message to dead-letter it
+            logger.error(`Message failed after 3 retries. Moving to dead-letter queue.`, { queueName, content });
+            // Reject the message and tell RabbitMQ not to requeue it.
+            // The queue's DLX configuration will handle moving it to the dead-letter queue.
+            channel.nack(message, false, false);
           }
         }
       },
@@ -240,6 +254,14 @@ export const emailQueue = {
       data: paymentData,
     });
   },
+
+  sendManagerInvitation: async (userData) => {
+    return publishMessage(ROUTING_KEYS.EMAIL_MANAGER_INVITATION, {
+      type: 'MANAGER_INVITATION',
+      to: userData.email,
+      data: userData,
+    });
+  },
 };
 
 // PDF queue helpers
@@ -272,6 +294,24 @@ export const paymentQueue = {
     return publishMessage(ROUTING_KEYS.PAYMENT_WEBHOOK, {
       type: 'WEBHOOK',
       data: webhookData,
+    });
+  },
+
+  monitorPayment: async (paymentData) => {
+    return publishMessage(ROUTING_KEYS.PAYMENT_MONITOR, {
+      type: 'MONITOR',
+      data: paymentData,
+    });
+  },
+};
+
+// Booking queue helpers
+export const bookingQueue = {
+  confirmBooking: async (bookingId, paymentId) => {
+    return publishMessage(ROUTING_KEYS.BOOKING_CONFIRM, {
+      type: 'CONFIRM_BOOKING',
+      bookingId,
+      paymentId,
     });
   },
 };
@@ -331,4 +371,5 @@ export default {
   pdfQueue,
   paymentQueue,
   financeQueue,
+  bookingQueue,
 };

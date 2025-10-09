@@ -6,7 +6,7 @@ import {
   getUserBookings,
   getBookingById,
   cancelBooking,
-  confirmBooking,
+  // confirmBooking,
   getCampaignBookingStats,
   modifyBooking,
   requestRefund,
@@ -36,7 +36,7 @@ router.get('/:bookingId', ensureAuthenticated, asyncHandler(getBookingById));
 router.post('/:bookingId/cancel', ensureAuthenticated, asyncHandler(cancelBooking));
 
 // System routes (called after payment verification)
-router.post('/:bookingId/confirm', asyncHandler(confirmBooking));
+// router.post('/:bookingId/confirm', asyncHandler(confirmBooking));
 
 // Enhanced booking management routes
 router.put('/:bookingId/modify', ensureAuthenticated, validateBookingModification, asyncHandler(modifyBooking));

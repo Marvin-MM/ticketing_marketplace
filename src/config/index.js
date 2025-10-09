@@ -14,6 +14,7 @@ const config = {
     env: process.env.NODE_ENV || 'development',
     port: parseInt(process.env.PORT, 10) || 3000,
     url: process.env.APP_URL || 'http://localhost:3000',
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
     apiVersion: process.env.API_VERSION || 'v1',
     isDevelopment: process.env.NODE_ENV === 'development',
     isProduction: process.env.NODE_ENV === 'production',

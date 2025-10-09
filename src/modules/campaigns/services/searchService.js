@@ -645,10 +645,12 @@ const getMaxPrice = (ticketTypes) => {
   return Math.max(...prices);
 };
 
-export default {
+const searchService = {
   searchCampaigns,
   getFeaturedCampaigns,
   getNearbyCampaigns,
   getSearchSuggestions,
   getAvailableFilters
 };
+
+export default searchService;

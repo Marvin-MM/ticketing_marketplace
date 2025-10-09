@@ -1,33 +1,33 @@
 import { AuthenticationError, AuthorizationError } from '../../../shared/errors/AppError.js';
 import logger from '../../../config/logger.js';
 import prisma from '../../../config/database.js';
-import { verifyToken, extractTokenFromHeader } from '../../../shared/utils/jwt.js';
+import { extractSessionFromCookie } from '../../../shared/utils/token.utils.js';
+import { validateSession, extendSession } from '../../../shared/utils/session.js';
 
 /**
- * Ensure user is authenticated (supports both JWT and session)
+ * Ensure user is authenticated using cookie-based sessions
  */
 export const ensureAuthenticated = async (req, res, next) => {
   try {
-    // Check session authentication first
-    if (req.isAuthenticated() && req.user) {
-      return next();
-    }
-
-    // Check JWT authentication
-    const token = extractTokenFromHeader(req);
-    if (!token) {
+    // Extract session ID from cookie
+    const sessionId = extractSessionFromCookie(req);
+    
+    if (!sessionId) {
       throw new AuthenticationError('Please log in to access this resource');
     }
 
-    // Verify JWT token
-    const tokenResult = verifyToken(token);
-    if (!tokenResult.valid) {
-      throw new AuthenticationError('Invalid or expired token');
+    // Validate session in Redis
+    const sessionResult = await validateSession(sessionId);
+    
+    if (!sessionResult.valid) {
+      throw new AuthenticationError(sessionResult.reason || 'Invalid or expired session');
     }
 
-    // Get user from database
+    const { session } = sessionResult;
+
+    // Get fresh user data from database
     const user = await prisma.user.findUnique({
-      where: { id: tokenResult.payload.id },
+      where: { id: session.userId },
       select: {
         id: true,
         email: true,
@@ -44,13 +44,20 @@ export const ensureAuthenticated = async (req, res, next) => {
       throw new AuthenticationError('User not found or account deactivated');
     }
 
-    // Attach user to request
+    // Attach user and session to request
     req.user = user;
+    req.sessionId = sessionId;
+    req.sessionData = session;
+
+    // Extend session TTL on activity
+    await extendSession(sessionId);
+
     next();
   } catch (error) {
     if (error instanceof AuthenticationError) {
       throw error;
     }
+    logger.error('Authentication error:', error);
     throw new AuthenticationError('Authentication failed');
   }
 };
@@ -91,16 +98,23 @@ export const ensureRoles = (...roles) => {
 /**
  * Ensure user is seller with approved application
  */
-export const ensureApprovedSeller = (req, res, next) => {
-  if (!req.isAuthenticated() || !req.user) {
-    throw new AuthenticationError('Please log in to access this resource');
-  }
+export const ensureApprovedSeller = async (req, res, next) => {
+  try {
+    // First ensure authentication
+    await ensureAuthenticated(req, res, () => {});
 
-  if (req.user.role !== 'SELLER' || req.user.applicationStatus !== 'APPROVED') {
-    throw new AuthorizationError('Only approved sellers can access this resource');
-  }
+    if (!req.user) {
+      throw new AuthenticationError('Please log in to access this resource');
+    }
 
-  next();
+    if (req.user.role !== 'SELLER' || req.user.applicationStatus !== 'APPROVED') {
+      throw new AuthorizationError('Only approved sellers can access this resource');
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
 };
 
 /**

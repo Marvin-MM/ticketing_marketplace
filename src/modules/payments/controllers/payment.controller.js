@@ -1,22 +1,13 @@
-import Flutterwave from 'flutterwave-node-v3';
-import crypto from 'crypto';
 import prisma from '../../../config/database.js';
 import logger from '../../../config/logger.js';
 import config from '../../../config/index.js';
 import { 
-  ValidationError, 
   NotFoundError, 
   PaymentError 
 } from '../../../shared/errors/AppError.js';
 import { generateUniqueId } from '../../../shared/utils/encryption.js';
 import paymentService from '../services/paymentService.js';
 import paymentAnalyticsService from '../services/paymentAnalyticsService.js';
-
-// Initialize Flutterwave
-const flw = new Flutterwave(
-  config.flutterwave.publicKey,
-  config.flutterwave.secretKey
-);
 
 /**
  * Initialize payment using enhanced payment service
@@ -27,7 +18,7 @@ export const initializePayment = async (req, res) => {
 
   try {
     const options = {
-      currency: currency || 'USD',
+      currency: currency || 'UGX',
       paymentMethod: paymentMethod || 'card',
       installments: installments || 1,
       metadata: metadata || {}
@@ -77,12 +68,34 @@ export const initializePayment = async (req, res) => {
 /**
  * Handle Flutterwave webhook with enhanced security
  */
+// export const handleWebhook = async (req, res) => {
+//   const signature = req.headers['verif-hash'];
+//   const sourceIP = req.ip;
+  
+//   try {
+//     const result = await paymentService.processWebhook(req.body, signature, sourceIP);
+    
+//     res.status(200).json(result);
+//   } catch (error) {
+//     logger.error('Webhook processing failed:', {
+//       signature: signature ? 'present' : 'missing',
+//       sourceIP,
+//       error: error.message
+//     });
+//     res.status(200).json({ status: 'success', message: 'Webhook received' });
+//   }
+// };
+
+// In payment controller
 export const handleWebhook = async (req, res) => {
   const signature = req.headers['verif-hash'];
   const sourceIP = req.ip;
   
   try {
-    const result = await paymentService.processWebhook(req.body, signature, sourceIP);
+    // Make sure body is parsed
+    const webhookData = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    
+    const result = await paymentService.processWebhook(webhookData, signature, sourceIP);
     
     res.status(200).json(result);
   } catch (error) {
@@ -91,6 +104,7 @@ export const handleWebhook = async (req, res) => {
       sourceIP,
       error: error.message
     });
+    // ALWAYS return 200 to webhooks, even on error
     res.status(200).json({ status: 'success', message: 'Webhook received' });
   }
 };

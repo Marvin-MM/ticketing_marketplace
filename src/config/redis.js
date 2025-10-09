@@ -6,30 +6,48 @@ import logger from './logger.js';
 const redis = new Redis({
   host: config.redis.host,
   port: config.redis.port,
-  password: config.redis.password,
+  // password: config.redis.password,
   db: config.redis.db,
   retryStrategy: (times) => {
+    // Limit retry attempts to prevent infinite reconnection loops
+    if (times > 10) {
+      logger.warn('Redis max retry attempts reached. Stopping reconnection.');
+      return null; // Stop retrying
+    }
     const delay = Math.min(times * 50, 2000); // Exponential backoff with a maximum delay of 2 seconds
     return delay;
   },
   maxRetriesPerRequest: 3,
   enableReadyCheck: true,
-  lazyConnect: false,
+  lazyConnect: true, // Don't connect immediately
+  enableOfflineQueue: true, // Queue commands when offline
 });
 
 // Create Redis pub/sub clients for real-time features
 const publisher = new Redis({
   host: config.redis.host,
   port: config.redis.port,
-  password: config.redis.password,
+  // password: config.redis.password,
   db: config.redis.db,
+  retryStrategy: (times) => {
+    if (times > 10) return null;
+    return Math.min(times * 50, 2000);
+  },
+  lazyConnect: true,
+  enableOfflineQueue: true,
 });
 
 const subscriber = new Redis({
   host: config.redis.host,
   port: config.redis.port,
-  password: config.redis.password,
+  // password: config.redis.password,
   db: config.redis.db,
+  retryStrategy: (times) => {
+    if (times > 10) return null;
+    return Math.min(times * 50, 2000);
+  },
+  lazyConnect: true,
+  enableOfflineQueue: true,
 });
 
 // Handle Redis connection events
@@ -38,16 +56,40 @@ redis.on('connect', () => {
 });
 
 redis.on('error', (error) => {
-  logger.error('❌ Redis connection error:', error);
+  // Only log error once, not on every retry
+  if (error.code === 'ECONNREFUSED' || error.code === 'EAI_AGAIN') {
+    logger.warn(`⚠️  Redis connection failed: ${error.message}. App will continue without Redis.`);
+  } else {
+    logger.error('❌ Redis connection error:', error);
+  }
 });
 
 redis.on('close', () => {
-  logger.warn('Redis connection closed');
+  logger.debug('Redis connection closed');
 });
 
 redis.on('reconnecting', () => {
-  logger.info('Reconnecting to Redis...');
+  logger.debug('Reconnecting to Redis...');
 });
+
+// Attempt to connect to Redis
+(async () => {
+  try {
+    await redis.connect();
+  } catch (error) {
+    logger.warn(`⚠️  Could not connect to Redis at ${config.redis.host}:${config.redis.port}. Continuing without Redis.`);
+  }
+})();
+
+// Connect publisher and subscriber
+(async () => {
+  try {
+    await publisher.connect();
+    await subscriber.connect();
+  } catch (error) {
+    logger.debug('Redis pub/sub clients could not connect');
+  }
+})();
 
 // Utility functions for common Redis operations
 
@@ -113,28 +155,42 @@ export const bookingCounters = {
 // Session management functions
 export const sessionStore = {
   // Store session data
-  set: async (sessionId, data, ttl = 86400) => {
-    const key = `session:${sessionId}`;
-    await redis.setex(key, ttl, JSON.stringify(data));
+  set: async (key, data, ttl = 86400) => {
+    try {
+      await redis.setex(key, ttl, JSON.stringify(data));
+    } catch (error) {
+      logger.error('Redis set error:', error);
+      throw error;
+    }
   },
   
   // Get session data
-  get: async (sessionId) => {
-    const key = `session:${sessionId}`;
-    const data = await redis.get(key);
-    return data ? JSON.parse(data) : null;
+  get: async (key) => {
+    try {
+      const data = await redis.get(key);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      logger.error('Redis get error:', error);
+      return null;
+    }
   },
   
   // Delete session
-  delete: async (sessionId) => {
-    const key = `session:${sessionId}`;
-    await redis.del(key);
+  delete: async (key) => {
+    try {
+      await redis.del(key);
+    } catch (error) {
+      logger.error('Redis delete error:', error);
+    }
   },
   
   // Extend session TTL
-  touch: async (sessionId, ttl = 86400) => {
-    const key = `session:${sessionId}`;
-    await redis.expire(key, ttl);
+  touch: async (key, ttl = 86400) => {
+    try {
+      await redis.expire(key, ttl);
+    } catch (error) {
+      logger.error('Redis touch error:', error);
+    }
   },
 };
 
@@ -161,10 +217,19 @@ export const cache = {
   
   // Clear all cache matching pattern
   clearPattern: async (pattern) => {
-    const keys = await redis.keys(`cache:${pattern}`);
-    if (keys.length > 0) {
-      await redis.del(...keys);
-    }
+    let cursor = '0';
+    const matchPattern = `cache:${pattern}`;
+
+    do {
+      // Scan for a batch of keys without blocking the server
+      const [newCursor, keys] = await redis.scan(cursor, 'MATCH', matchPattern, 'COUNT', '100');
+      cursor = newCursor;
+
+      if (keys.length > 0) {
+        // Delete the found keys in this batch
+        await redis.del(keys);
+      }
+    } while (cursor !== '0'); // Continue scanning until the cursor returns to '0'
   },
 };
 

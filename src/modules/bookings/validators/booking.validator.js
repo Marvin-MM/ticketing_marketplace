@@ -14,9 +14,9 @@ const handleValidationErrors = (req, res, next) => {
 };
 
 export const validateBooking = [
-  body('campaignId')
-    .notEmpty().withMessage('Campaign ID is required')
-    .isUUID().withMessage('Invalid campaign ID'),
+  // body('campaignId')
+  //   .notEmpty().withMessage('Campaign ID is required')
+  //   .isUUID().withMessage('Invalid campaign ID'),
   
   body('ticketType')
     .trim()

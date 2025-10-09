@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import config from '../../config/index.js';
 
 const algorithm = config.security.encryption.algorithm;
@@ -50,27 +51,25 @@ export const generateSecureToken = (length = 32) => {
 };
 
 /**
- * Hash a password using bcrypt-like algorithm
+ * Hashes a password using bcrypt.
+ * This is an async function.
+ * @param {string} password The plaintext password.
+ * @returns {Promise<string>} The hashed password.
  */
-export const hashPassword = (password) => {
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512');
-  return salt.toString('hex') + ':' + hash.toString('hex');
+export const hashPassword = async (password) => {
+  const salt = await bcrypt.genSalt(12);
+  return bcrypt.hash(password, salt);
 };
 
 /**
- * Verify a password against a hash
+ * Verifies a password against a bcrypt hash.
+ * This is an async function.
+ * @param {string} password The plaintext password to verify.
+ * @param {string} hashedPassword The hash to compare against.
+ * @returns {Promise<boolean>} True if the password is a match.
  */
-export const verifyPassword = (password, hashedPassword) => {
-  const [salt, hash] = hashedPassword.split(':');
-  const verifyHash = crypto.pbkdf2Sync(
-    password,
-    Buffer.from(salt, 'hex'),
-    100000,
-    64,
-    'sha512'
-  );
-  return hash === verifyHash.toString('hex');
+export const verifyPassword = async (password, hashedPassword) => {
+  return bcrypt.compare(password, hashedPassword);
 };
 
 /**

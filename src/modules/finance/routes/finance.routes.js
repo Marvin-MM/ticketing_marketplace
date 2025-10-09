@@ -17,7 +17,7 @@ const router = express.Router();
 // Financial dashboard (Seller only)
 router.get('/dashboard', ensureRoles('SELLER'), asyncHandler(getFinancialDashboard));
 
-// Withdrawal methods
+// Withdrawal methods 
 router.post('/withdrawal-methods', ensureRoles('SELLER'), asyncHandler(addWithdrawalMethod));
 router.delete('/withdrawal-methods/:methodId', ensureRoles('SELLER'), asyncHandler(removeWithdrawalMethod));
 
