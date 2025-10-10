@@ -18,7 +18,7 @@ import {
   verifySpecialToken,
   extractRefreshTokenFromCookie 
 } from '../../../shared/utils/token.utils.js';
-import { createSession, refreshSession, destroySession } from '../../../shared/utils/session.js';
+import { getSession, createSession, refreshSession, destroySession } from '../../../shared/utils/session.js';
 import { setAuthCookies, clearAuthCookies } from '../../../shared/utils/cookies.js';
 
 /**
@@ -482,18 +482,52 @@ export const googleCallback = async (req, res, next) => {
 /**
  * Logout handler - destroy session and clear cookies
  */
+// export const logout = async (req, res) => {
+//   const userId = req.user?.id;
+//   const sessionId = req.sessionId;
+//   const refreshTokenId = req.sessionData?.refreshTokenId;
+  
+//   // Destroy session in Redis
+//   await destroySession(sessionId, refreshTokenId);
+  
+//   // Clear auth cookies
+//   clearAuthCookies(res);
+  
+//   logger.info('User logged out', { userId });
+  
+//   res.status(200).json({
+//     success: true,
+//     message: 'Logged out successfully',
+//   });
+// };
 export const logout = async (req, res) => {
-  const userId = req.user?.id;
-  const sessionId = req.sessionId;
-  const refreshTokenId = req.sessionData?.refreshTokenId;
+  // Get session identifiers directly from cookies, not from middleware.
+  const sessionId = req.cookies.sessionId;
+  const refreshTokenFromCookie = req.cookies.refreshToken;
+  let refreshTokenId = refreshTokenFromCookie; // Use the cookie value by default
+
+  try {
+    // Optional: For extra security, we can look up the session to get the linked refreshTokenId.
+    // This ensures we only delete tokens that belong together.
+    if (sessionId) {
+      const session = await getSession(sessionId);
+      if (session?.refreshTokenId) {
+        refreshTokenId = session.refreshTokenId;
+      }
+    }
+
+    // Attempt to destroy the server-side session. This will not throw an error if keys don't exist.
+    await destroySession(sessionId, refreshTokenId);
+    
+    logger.info('User session destroyed on server.', { sessionId });
+
+  } catch (error) {
+    // Even if destroying the server session fails, we must continue to clear the client cookies.
+    logger.error('Error destroying server session during logout. Proceeding to clear cookies.', error);
+  }
   
-  // Destroy session in Redis
-  await destroySession(sessionId, refreshTokenId);
-  
-  // Clear auth cookies
+  // Always clear the cookies on the client's browser. This is the most important step.
   clearAuthCookies(res);
-  
-  logger.info('User logged out', { userId });
   
   res.status(200).json({
     success: true,
