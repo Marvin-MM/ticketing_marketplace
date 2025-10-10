@@ -31,9 +31,15 @@ const app = express();
 const server = createServer(app);
 
 // Initialize Socket.io
+// const io = new Server(server, {
+//   cors: {
+//     origin: config.security.corsOrigin,
+//     credentials: true,
+//   },
+// });
 const io = new Server(server, {
   cors: {
-    origin: config.security.corsOrigin,
+    origin: "*",
     credentials: true,
   },
 });
