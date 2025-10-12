@@ -66,7 +66,7 @@ app.set('trust proxy', 1);
 //   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
 //   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 // }));
-app.use(cors());
+// app.use(cors());
 
 // Compression middleware
 app.use(compression());
