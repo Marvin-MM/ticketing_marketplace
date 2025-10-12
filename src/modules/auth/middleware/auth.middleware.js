@@ -7,58 +7,95 @@ import { validateSession, extendSession } from '../../../shared/utils/session.js
 /**
  * Ensure user is authenticated using cookie-based sessions
  */
+// export const ensureAuthenticated = async (req, res, next) => {
+//   try {
+//     // Extract session ID from cookie
+//     const sessionId = extractSessionFromCookie(req);
+    
+//     if (!sessionId) {
+//       throw new AuthenticationError('Please log in to access this resource');
+//     }
+
+//     // Validate session in Redis
+//     const sessionResult = await validateSession(sessionId);
+    
+//     if (!sessionResult.valid) {
+//       throw new AuthenticationError(sessionResult.reason || 'Invalid or expired session');
+//     }
+
+//     const { session } = sessionResult;
+
+//     // Get fresh user data from database
+//     const user = await prisma.user.findUnique({
+//       where: { id: session.userId },
+//       select: {
+//         id: true,
+//         email: true,
+//         firstName: true,
+//         lastName: true,
+//         role: true,
+//         isActive: true,
+//         isEmailVerified: true,
+//         applicationStatus: true,
+//       },
+//     });
+
+//     if (!user || !user.isActive) {
+//       throw new AuthenticationError('User not found or account deactivated');
+//     }
+
+//     // Attach user and session to request
+//     req.user = user;
+//     req.sessionId = sessionId;
+//     req.sessionData = session;
+
+//     // Extend session TTL on activity
+//     await extendSession(sessionId);
+
+//     next();
+//   } catch (error) {
+//     if (error instanceof AuthenticationError) {
+//       throw error;
+//     }
+//     logger.error('Authentication error:', error);
+//     throw new AuthenticationError('Authentication failed');
+//   }
+// };
+
 export const ensureAuthenticated = async (req, res, next) => {
   try {
-    // Extract session ID from cookie
     const sessionId = extractSessionFromCookie(req);
-    
     if (!sessionId) {
-      throw new AuthenticationError('Please log in to access this resource');
+      // We can call next(error) directly here, it's even cleaner
+      return next(new AuthenticationError('Please log in to access this resource'));
     }
 
-    // Validate session in Redis
     const sessionResult = await validateSession(sessionId);
-    
     if (!sessionResult.valid) {
-      throw new AuthenticationError(sessionResult.reason || 'Invalid or expired session');
+      return next(new AuthenticationError(sessionResult.reason || 'Invalid or expired session'));
     }
 
     const { session } = sessionResult;
-
-    // Get fresh user data from database
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        isActive: true,
-        isEmailVerified: true,
-        applicationStatus: true,
-      },
+      // ... (select fields)
     });
 
     if (!user || !user.isActive) {
-      throw new AuthenticationError('User not found or account deactivated');
+      return next(new AuthenticationError('User not found or account deactivated'));
     }
 
-    // Attach user and session to request
     req.user = user;
     req.sessionId = sessionId;
     req.sessionData = session;
 
-    // Extend session TTL on activity
     await extendSession(sessionId);
 
     next();
   } catch (error) {
-    if (error instanceof AuthenticationError) {
-      throw error;
-    }
-    logger.error('Authentication error:', error);
-    throw new AuthenticationError('Authentication failed');
+    // This will now catch any unexpected errors and pass them on safely
+    logger.error('Unexpected authentication error:', error);
+    next(new AuthenticationError('Authentication failed due to an internal error.'));
   }
 };
 

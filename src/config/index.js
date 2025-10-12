@@ -70,6 +70,12 @@ const config = {
     encryptionKey: process.env.FLUTTERWAVE_ENCRYPTION_KEY,
     webhookSecret: process.env.FLUTTERWAVE_WEBHOOK_SECRET,
   },
+
+  pesapal: {
+    consumerKey: process.env.PESAPAL_CONSUMER_KEY,
+    consumerSecret: process.env.PESAPAL_CONSUMER_SECRET,
+    environment: process.env.PESAPAL_ENVIRONMENT || 'sandbox',
+  },
   
   email: {
     host: process.env.EMAIL_HOST || 'smtp.gmail.com',

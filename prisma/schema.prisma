@@ -282,34 +282,70 @@ model Booking {
 }
 
 // Payment model for Flutterwave integration
+// model Payment {
+//   id                  String              @id @default(cuid())
+//   bookingId           String              @unique
+//   customerId          String
+//   transactionRef      String              @unique
+//   flutterwaveRef      String?             @unique
+//   amount              Decimal             @db.Decimal(10, 2)
+//   currency            String              @default("USD")
+//   status              PaymentStatus       @default(PENDING)
+//   paymentMethod       String?             // card, bank_transfer, mobile_money, etc.
+//   paymentDetails      Json?               // Encrypted payment details
+//   webhookData         Json?               // Raw webhook data from Flutterwave
+//   verifiedAt          DateTime?
+//   failureReason       String?
+//   retryCount          Int                 @default(0)
+//   lastRetryAt         DateTime?
+//   createdAt           DateTime            @default(now())
+//   updatedAt           DateTime            @updatedAt
+
+//   // Relations
+//   booking             Booking             @relation(fields: [bookingId], references: [id])
+//   customer            User                @relation(fields: [customerId], references: [id])
+//   transaction         Transaction?
+
+//   @@index([customerId])
+//   @@index([status])
+//   @@index([transactionRef])
+//   @@index([flutterwaveRef])
+//   @@map("payments")
+// }
+
 model Payment {
-  id                  String              @id @default(cuid())
-  bookingId           String              @unique
+  id                  String        @id @default(cuid())
+  bookingId           String        @unique
   customerId          String
-  transactionRef      String              @unique
-  flutterwaveRef      String?             @unique
-  amount              Decimal             @db.Decimal(10, 2)
-  currency            String              @default("USD")
-  status              PaymentStatus       @default(PENDING)
-  paymentMethod       String?             // card, bank_transfer, mobile_money, etc.
-  paymentDetails      Json?               // Encrypted payment details
-  webhookData         Json?               // Raw webhook data from Flutterwave
+  transactionRef      String        @unique // This will be our internal reference (Pesapal's merchant_reference)
+  
+  // Generic Provider Fields (NEW)
+  provider            String        @default("PESAPAL") // To identify the payment gateway
+  providerRef         String?       @unique // The redirect URL or main reference from the provider
+  providerTrackingId  String?       @unique // Pesapal's OrderTrackingId
+
+  amount              Decimal       @db.Decimal(10, 2)
+  currency            String        @default("UGX")
+  status              PaymentStatus @default(PENDING)
+  paymentMethod       String?
+  paymentDetails      Json?
+  webhookData         Json?
   verifiedAt          DateTime?
   failureReason       String?
-  retryCount          Int                 @default(0)
+  retryCount          Int           @default(0)
   lastRetryAt         DateTime?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   // Relations
-  booking             Booking             @relation(fields: [bookingId], references: [id])
-  customer            User                @relation(fields: [customerId], references: [id])
+  booking             Booking       @relation(fields: [bookingId], references: [id])
+  customer            User          @relation(fields: [customerId], references: [id])
   transaction         Transaction?
 
   @@index([customerId])
   @@index([status])
   @@index([transactionRef])
-  @@index([flutterwaveRef])
+  @@index([providerTrackingId])
   @@map("payments")
 }
 

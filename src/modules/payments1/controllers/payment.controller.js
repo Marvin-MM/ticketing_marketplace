@@ -66,34 +66,47 @@ export const initializePayment = async (req, res) => {
 };
 
 /**
- * Handle Pesapal webhook with enhanced security
+ * Handle Flutterwave webhook with enhanced security
  */
+// export const handleWebhook = async (req, res) => {
+//   const signature = req.headers['verif-hash'];
+//   const sourceIP = req.ip;
+  
+//   try {
+//     const result = await paymentService.processWebhook(req.body, signature, sourceIP);
+    
+//     res.status(200).json(result);
+//   } catch (error) {
+//     logger.error('Webhook processing failed:', {
+//       signature: signature ? 'present' : 'missing',
+//       sourceIP,
+//       error: error.message
+//     });
+//     res.status(200).json({ status: 'success', message: 'Webhook received' });
+//   }
+// };
+
+// In payment controller
 export const handleWebhook = async (req, res) => {
-  const { OrderTrackingId, OrderMerchantReference } = req.query;
+  const signature = req.headers['verif-hash'];
   const sourceIP = req.ip;
-
-  logger.info('Pesapal IPN received', { OrderTrackingId, OrderMerchantReference, sourceIP });
-
-  if (!OrderTrackingId || !OrderMerchantReference) {
-    logger.warn('Invalid IPN received from Pesapal', { query: req.query });
-    // Still send 200 OK so Pesapal doesn't keep retrying
-    return res.status(200).send(`pesapal_notification_id=${req.query.pesapal_notification_id}&pesapal_tracking_id=${OrderTrackingId}&pesapal_merchant_reference=${OrderMerchantReference}&status=COMPLETED`);
-  }
-
+  
   try {
-    // Pass the query data to the service for processing
-    await paymentService.processWebhook(req.query);
+    // Make sure body is parsed
+    const webhookData = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    
+    const result = await paymentService.processWebhook(webhookData, signature, sourceIP);
+    
+    res.status(200).json(result);
   } catch (error) {
     logger.error('Webhook processing failed:', {
-      OrderTrackingId,
+      signature: signature ? 'present' : 'missing',
+      sourceIP,
       error: error.message
     });
-    // We catch errors but still respond with success to Pesapal
+    // ALWAYS return 200 to webhooks, even on error
+    res.status(200).json({ status: 'success', message: 'Webhook received' });
   }
-
-  // Pesapal requires a specific response format to acknowledge the IPN
-  const responseText = `pesapal_notification_id=${req.query.pesapal_notification_id}&pesapal_tracking_id=${OrderTrackingId}&pesapal_merchant_reference=${OrderMerchantReference}&status=COMPLETED`;
-  res.status(200).send(responseText);
 };
 
 /**
