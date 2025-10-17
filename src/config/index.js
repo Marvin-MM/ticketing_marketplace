@@ -98,7 +98,7 @@ const config = {
   },
   
   logging: {
-    level: process.env.LOG_LEVEL || 'info',
+    level: process.env.LOG_LEVEL,
     filePath: process.env.LOG_FILE_PATH,
   },
   

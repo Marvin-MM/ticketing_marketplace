@@ -58,50 +58,58 @@ const consoleFormat = winston.format.combine(
   })
 );
 
-// Create daily rotate file transport for errors
-const errorFileTransport = new DailyRotateFile({
-  filename: path.join(config.logging.filePath, 'error-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  zippedArchive: true,
-  maxSize: '20m',
-  maxFiles: '14d',
-  level: 'error',
-  format: logFormat,
-});
-
-// Create daily rotate file transport for all logs
-const combinedFileTransport = new DailyRotateFile({
-  filename: path.join(config.logging.filePath, 'combined-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  zippedArchive: true,
-  maxSize: '20m',
-  maxFiles: '14d',
-  format: logFormat,
-});
+// Detect if running on Vercel or other serverless platforms with read-only filesystem
+const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.FUNCTION_NAME;
 
 // Create transports array
 const transports = [];
 
-// Add file transports in production
-if (config.app.isProduction) {
-  transports.push(errorFileTransport);
-  transports.push(combinedFileTransport);
+// Add file transports only if NOT on serverless and in production with valid file path
+if (config.app.isProduction && !isServerless && config.logging.filePath) {
+  try {
+    // Create daily rotate file transport for errors
+    const errorFileTransport = new DailyRotateFile({
+      filename: path.join(config.logging.filePath, 'error-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      zippedArchive: true,
+      maxSize: '20m',
+      maxFiles: '14d',
+      level: 'error',
+      format: logFormat,
+    });
+
+    // Create daily rotate file transport for all logs
+    const combinedFileTransport = new DailyRotateFile({
+      filename: path.join(config.logging.filePath, 'combined-%DATE%.log'),
+      datePattern: 'YYYY-MM-DD',
+      zippedArchive: true,
+      maxSize: '20m',
+      maxFiles: '14d',
+      format: logFormat,
+    });
+    
+    transports.push(errorFileTransport);
+    transports.push(combinedFileTransport);
+  } catch (error) {
+    console.warn('Failed to create file transports, falling back to console only:', error.message);
+  }
 }
 
-// Add console transport in development
+// Add console transport
 if (!config.app.isProduction) {
+  // Development: colorized output with all logs
   transports.push(
     new winston.transports.Console({
       format: consoleFormat,
-      level: config.logging.level,
+      level: config.logging.level || 'debug',
     })
   );
 } else {
-  // Minimal console output in production
+  // Production: JSON format for better log aggregation (Vercel, CloudWatch, etc.)
   transports.push(
     new winston.transports.Console({
       format: logFormat,
-      level: 'error',
+      level: config.logging.level || 'info',
     })
   );
 }
