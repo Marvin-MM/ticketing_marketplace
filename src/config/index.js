@@ -99,7 +99,7 @@ const config = {
   
   logging: {
     level: process.env.LOG_LEVEL || 'info',
-    filePath: process.env.LOG_FILE_PATH || './logs',
+    filePath: process.env.LOG_FILE_PATH,
   },
   
   payment: {

@@ -4,7 +4,7 @@ import config from './config/index.js';
 
 /**
  * Payment Service Diagnostic Tool
- * Run this to verify your setup before processing real payments
+ * Run this to verify your setup before processing real payments  
  */
 
 async function runDiagnostics() {

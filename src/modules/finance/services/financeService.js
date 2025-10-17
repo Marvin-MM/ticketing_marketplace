@@ -43,13 +43,13 @@ class financeService {
         cashflowAnalysis
       ] = await Promise.all([
         this._getFinancialSummary(finance, period),
-        this._getRecentTransactions(sellerId, 15),
-        this._getWithdrawalMethods(sellerId),
-        this._getRevenueAnalytics(sellerId, period),
-        this._getPendingWithdrawals(finance.id),
-        this._getTaxSummary(sellerId, period),
-        this._getCommissionBreakdown(sellerId, period),
-        this._getCashflowAnalysis(sellerId, period)
+        // this._getRecentTransactions(sellerId, 15),
+        // this._getWithdrawalMethods(sellerId),
+        // this._getRevenueAnalytics(sellerId, period),
+        // this._getPendingWithdrawals(finance.id),
+        // this._getTaxSummary(sellerId, period),
+        // this._getCommissionBreakdown(sellerId, period),
+        // this._getCashflowAnalysis(sellerId, period)
       ]);
 
       const dashboard = {
