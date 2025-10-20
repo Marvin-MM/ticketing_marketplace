@@ -185,15 +185,15 @@ class PaymentService {
     });
   }
 
-  async _handleExistingPayment(payment) {
+async _handleExistingPayment(payment) {
     if (payment.status === 'SUCCESS') {
       throw new PaymentError('Payment already completed');
     }
-    
     if (payment.status === 'PENDING') {
-      // Try to get payment link from either location
-      const paymentLink = payment.paymentDetails?.paymentLink || payment.flutterwaveRef;
-      
+      // --- FIX HERE ---
+      // Use providerRef which stores the Pesapal redirect URL
+      const paymentLink = payment.providerRef;
+
       if (paymentLink) {
         return {
           payment,
@@ -202,8 +202,7 @@ class PaymentService {
         };
       }
     }
-    
-    // For failed payments, allow retry
+    // For failed payments, allow retry by returning null
     return null;
   }
 

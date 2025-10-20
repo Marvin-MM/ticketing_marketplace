@@ -575,10 +575,10 @@ class financeService {
       periodRefunds,
       projectedEarnings
     ] = await Promise.all([
-      this._getPeriodRevenue(finance.sellerId, dateRange),
-      this._getPeriodWithdrawals(finance.sellerId, dateRange),
-      this._getPeriodRefunds(finance.sellerId, dateRange),
-      this._getProjectedEarnings(finance.sellerId)
+      // this._getPeriodRevenue(finance.sellerId, dateRange),
+      // this._getPeriodWithdrawals(finance.sellerId, dateRange),
+      // this._getPeriodRefunds(finance.sellerId, dateRange),
+      // this._getProjectedEarnings(finance.sellerId)
     ]);
 
     return {
