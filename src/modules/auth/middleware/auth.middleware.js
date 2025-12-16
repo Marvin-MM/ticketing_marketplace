@@ -179,3 +179,62 @@ export const extractUserFromToken = async (req, res, next) => {
     next();
   }
 };
+
+/**
+ * Ensure MANAGER is authenticated
+ * Validates session and checks against Manager table
+ */
+export const ensureManagerAuthenticated = async (req, res, next) => {
+  try {
+    const sessionId = extractSessionFromCookie(req);
+    
+    if (!sessionId) {
+      return next(new AuthenticationError('Please log in to access this resource'));
+    }
+
+    const sessionResult = await validateSession(sessionId);
+    if (!sessionResult.valid) {
+      return next(new AuthenticationError(sessionResult.reason || 'Invalid or expired session'));
+    }
+
+    const { session } = sessionResult;
+
+    // Check if the session belongs to a Manager (optional optimization)
+    // if (session.role !== 'MANAGER') { ... }
+
+    // Fetch Manager from DB
+    const manager = await prisma.manager.findUnique({
+      where: { id: session.userId },
+      include: {
+        seller: { // Optionally include seller info for context
+            select: { id: true, email: true, firstName: true }
+        } 
+      }
+    });
+
+    if (!manager || !manager.isActive) {
+      return next(new AuthenticationError('Manager account not found or deactivated'));
+    }
+
+    // Attach manager to request
+    // We maintain the same structure (req.user) OR use req.managerAccount for clarity
+    req.user = { 
+        id: manager.sellerId, // Map to Seller ID so validation logic works seamlessly? 
+        role: 'MANAGER',
+        managerAccount: manager 
+    };
+    
+    // OR if you prefer strict separation:
+    // req.manager = manager; 
+
+    req.sessionId = sessionId;
+    req.sessionData = session;
+
+    await extendSession(sessionId);
+
+    next();
+  } catch (error) {
+    logger.error('Manager authentication error:', error);
+    next(new AuthenticationError('Authentication failed'));
+  }
+};

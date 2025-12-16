@@ -23,6 +23,7 @@ import {
   deactivateManager,
   getSellerManagers,
   profile,
+  managerLogin,
 } from '../controllers/auth.controller.js';
 import {
   registerSchema,
@@ -37,6 +38,7 @@ import {
   createManagerSchema,
   acceptInvitationSchema,
   reviewApplicationSchema,
+  managerLoginSchema,
 } from '../validation/auth.validation.js';
 
 const router = express.Router();
@@ -72,6 +74,7 @@ router.post('/approve-seller/:applicationId', ensureRoles('SUPER_ADMIN'), valida
 router.post('/create-manager', ensureRoles('SELLER'), validateRequest(createManagerSchema), asyncHandler(createManager));
 router.get('/seller-managers', ensureRoles('SELLER'), asyncHandler(getSellerManagers));
 router.post('/accept-invitation', validateRequest(acceptInvitationSchema), asyncHandler(acceptManagerInvitation));
+router.post('/manager/login', validateRequest(managerLoginSchema), asyncHandler(managerLogin));
 router.post('/deactivate-manager/:managerId', ensureRoles('SELLER'), asyncHandler(deactivateManager));
 
 // Profile route

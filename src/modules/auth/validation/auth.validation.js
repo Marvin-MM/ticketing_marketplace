@@ -490,3 +490,23 @@ export const verifyEmailSchema = Joi.object({
       'any.required': 'Verification token is required'
     })
 });
+
+
+/**
+ * Manager login validation schema
+ */
+export const managerLoginSchema = Joi.object({
+  email: Joi.string()
+    .email()
+    .required()
+    .messages({
+      'string.email': 'Please enter a valid email address',
+      'any.required': 'Email is required'
+    }),
+
+  password: Joi.string()
+    .required()
+    .messages({
+      'any.required': 'Password is required'
+    }),
+});

@@ -1144,6 +1144,89 @@ export const acceptManagerInvitation = async (req, res) => {
 
 
 /**
+ * Manager Login (Mobile App)
+ */
+export const managerLogin = async (req, res) => {
+  const { email, password } = req.body;
+
+  // 1. Find Manager
+  const manager = await prisma.manager.findUnique({
+    where: { email },
+    include: {
+        seller: { // Include seller details if needed for UI context
+            select: { 
+                id: true, 
+                firstName: true, 
+                lastName: true, 
+                // businessName: true // Assuming this exists or is accessible
+            }
+        }
+    }
+  });
+
+  if (!manager) {
+    throw new AuthenticationError('Invalid email or password');
+  }
+
+  // 2. Check Password
+  // Note: Managers have passwords set via the acceptInvitation flow
+  if (!manager.password) {
+    throw new AuthenticationError('Account not fully set up. Please accept your invitation first.');
+  }
+
+  const isValidPassword = await bcrypt.compare(password, manager.password);
+  if (!isValidPassword) {
+    logger.warn('Failed manager login attempt', { email, ip: req.ip });
+    throw new AuthenticationError('Invalid email or password');
+  }
+
+  // 3. Check Active Status
+  if (!manager.isActive) {
+    throw new AuthenticationError('Your manager account has been deactivated.');
+  }
+
+  // 4. Update Last Active
+  await prisma.manager.update({
+    where: { id: manager.id },
+    data: { lastActiveAt: new Date() },
+  });
+
+  // 5. Create Session
+  // We reuse the session utility but pass the manager object.
+  // NOTE: This assumes createSession stores the ID. 
+  // The session middleware will need to know this is a manager.
+  const { sessionId, refreshTokenId } = await createSession({ 
+      id: manager.id, 
+      email: manager.email, 
+      role: 'MANAGER' // Explicitly set role for session context
+  }, true); // Always "remember me" for mobile apps typically
+
+  // 6. Set Cookies
+  setAuthCookies(res, sessionId, refreshTokenId, true);
+
+  logger.info('Manager logged in successfully', { managerId: manager.id });
+
+  res.status(200).json({
+    success: true,
+    message: 'Login successful',
+    data: {
+      manager: {
+        id: manager.id,
+        name: manager.name,
+        email: manager.email,
+        role: 'MANAGER',
+        permissions: manager.permissions,
+        sellerId: manager.sellerId,
+      },
+      // For mobile apps that might struggle with cookies, 
+      // it's sometimes helpful to return the session ID in body as fallback
+      // sessionId: sessionId 
+    },
+  });
+};
+
+
+/**
  * Deactivate manager (Seller only)
  */
 export const deactivateManager = async (req, res) => {
