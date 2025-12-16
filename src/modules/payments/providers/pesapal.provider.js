@@ -110,24 +110,88 @@ class PesapalProvider {
     }
   }
 
+  // async getTransactionStatus(orderTrackingId) {
+  //   try {
+  //     const token = await this.#getAccessToken();
+  //     const response = await fetch(
+  //       `${this.baseUrl}/api/Transactions/GetTransactionStatus?orderTrackingId=${orderTrackingId}`,
+  //       {
+  //         method: 'GET',
+  //         headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
+  //       }
+  //     );
+  //     const result = await response.json();
+
+  //     // --- THIS IS THE FIX ---
+  //     // Check for a valid Pesapal error structure before throwing
+  //     if (!response.ok || (result.error && result.error.code)) {
+  //       // Log the entire error object for clear debugging
+  //       logger.error('Pesapal API error during getTransactionStatus', { pesapalError: result.error });
+  //       const errorMessage = result.error?.message || 'Pesapal returned an unspecified error';
+  //       throw new Error(`Status check failed: ${errorMessage}`);
+  //     }
+  //     return result;
+  //   } catch (error) {
+  //     logger.error('Error getting Pesapal transaction status:', error);
+  //     throw new Error('Failed to check payment status');
+  //   }
+  // }
   async getTransactionStatus(orderTrackingId) {
+    let response; // Define response outside try block for logging
     try {
       const token = await this.#getAccessToken();
-      const response = await fetch(
-        `${this.baseUrl}/api/Transactions/GetTransactionStatus?orderTrackingId=${orderTrackingId}`,
-        {
-          method: 'GET',
-          headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
-        }
-      );
-      const result = await response.json();
-      if (!response.ok || result.error) {
-        throw new Error(`Status check error: ${result.error?.message}`);
+      const url = `${this.baseUrl}/api/Transactions/GetTransactionStatus?orderTrackingId=${orderTrackingId}`;
+      logger.debug('Calling Pesapal GetTransactionStatus', { url }); // Log the URL
+
+      response = await fetch(url, { // Assign to outer scope variable
+        method: 'GET',
+        headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token}` },
+      });
+
+      // --- Enhanced Error Handling ---
+      if (!response.ok) {
+        // Log status and potentially the response body text if not ok
+        const errorBody = await response.text();
+        logger.error('Pesapal API returned non-OK status', { status: response.status, body: errorBody, orderTrackingId });
+        throw new Error(`Pesapal API Error: Status ${response.status}`);
       }
-      return result;
+
+      // Try to parse JSON, but handle cases where it might not be JSON
+      let result;
+      try {
+        result = await response.json();
+      } catch (jsonError) {
+        // Log the raw text response if JSON parsing fails
+        const rawBody = await response.text(); // Need to re-read text if json() failed
+        logger.error('Pesapal API returned non-JSON response', { status: response.status, body: rawBody, orderTrackingId, jsonError: jsonError.message });
+        throw new Error('Pesapal returned an invalid response format.');
+      }
+
+      // Check for Pesapal's specific error structure within the JSON
+      if (result && result.error && result.error.code) {
+         logger.error('Pesapal API returned functional error', { result, orderTrackingId });
+         throw new Error(`Pesapal Error: ${result.error.message || 'Unknown Pesapal error'}`);
+      }
+
+      // Check if the result itself is null or missing key properties
+       if (!result || typeof result.payment_status_description === 'undefined') {
+         logger.error('Pesapal API returned unexpected JSON structure', { result, orderTrackingId });
+         throw new Error('Pesapal returned incomplete status data.');
+       }
+      // --- End Enhanced Error Handling ---
+
+      logger.info('Pesapal GetTransactionStatus successful', { result, orderTrackingId });
+      return result; // Success case
+
     } catch (error) {
-      logger.error('Error getting Pesapal transaction status:', error);
-      throw new Error('Failed to check payment status');
+      // Log the specific error caught (could be from fetch, json parsing, or explicit throws)
+      logger.error('Error getting Pesapal transaction status:', {
+          message: error.message,
+          orderTrackingId,
+          responseStatus: response?.status // Log status if response object exists
+      });
+      // Re-throw a generic but informative error for the service layer
+      throw new Error('Failed to check payment status with Pesapal');
     }
   }
 }

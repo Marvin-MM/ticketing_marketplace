@@ -1049,6 +1049,61 @@ export const createManager = async (req, res) => {
 };
 
 /**
+ * Get all managers for the authenticated seller
+ */
+export const getSellerManagers = async (req, res) => {
+  const sellerId = req.user.id;
+
+  // Query database for managers linked to this seller
+  const managers = await prisma.manager.findMany({
+    where: {
+      sellerId,
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      isActive: true,
+      permissions: true,
+      lastActiveAt: true,
+      createdAt: true,
+      invitationExpiry: true,
+    },
+    orderBy: {
+      createdAt: 'desc', // Show newest managers first
+    },
+  });
+
+  // Process list to add a computed 'status' for frontend display
+  const formattedManagers = managers.map((manager) => {
+    let status = 'INACTIVE';
+    
+    if (manager.isActive) {
+      status = 'ACTIVE';
+    } else if (manager.invitationExpiry && new Date(manager.invitationExpiry) > new Date()) {
+      status = 'PENDING_INVITE';
+    } else if (manager.invitationExpiry && new Date(manager.invitationExpiry) <= new Date()) {
+      status = 'INVITE_EXPIRED';
+    }
+
+    return {
+      ...manager,
+      status,
+    };
+  });
+
+  res.status(200).json({
+    success: true,
+    message: 'Managers retrieved successfully',
+    data: {
+      managers: formattedManagers,
+      count: formattedManagers.length,
+    },
+  });
+};
+
+/**
  * Accept Manager Invitation (New Controller)
  */
 export const acceptManagerInvitation = async (req, res) => {

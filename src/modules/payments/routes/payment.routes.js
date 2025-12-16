@@ -13,7 +13,7 @@ const router = express.Router();
 
 // Payment routes
 router.post('/initialize', ensureAuthenticated, asyncHandler(initializePayment));
-router.post('/webhook', asyncHandler(handleWebhook)); // No auth for webhook
+router.get('/webhook', asyncHandler(handleWebhook)); // No auth for webhook
 router.get('/verify/:reference', asyncHandler(verifyPayment));
 router.get('/history', ensureAuthenticated, asyncHandler(getPaymentHistory));
 router.post('/:paymentId/refund', ensureAuthenticated, asyncHandler(requestRefund));

@@ -32,6 +32,7 @@ export const getFinancialDashboard = async (req, res) => {
 
 /**
  * Add withdrawal method
+ * FIX: Secure duplicate check
  */
 export const addWithdrawalMethod = async (req, res) => {
   const sellerId = req.user.id;
@@ -47,40 +48,31 @@ export const addWithdrawalMethod = async (req, res) => {
     setAsDefault,
   } = req.body;
 
-  // Validate method type
+  // Basic validation
   if (!['BANK_ACCOUNT', 'MOBILE_MONEY', 'PAYPAL'].includes(method)) {
     throw new ValidationError('Invalid withdrawal method');
   }
 
-  // Validate required fields based on method
-  if (method === 'BANK_ACCOUNT') {
-    if (!accountNumber || !bankName || !bankCode) {
-      throw new ValidationError('Bank account details are required');
-    }
-  } else if (method === 'MOBILE_MONEY') {
-    if (!mobileProvider || !mobileNumber) {
-      throw new ValidationError('Mobile money details are required');
-    }
-  } else if (method === 'PAYPAL') {
-    if (!paypalEmail) {
-      throw new ValidationError('PayPal email is required');
-    }
-  }
-
-  // Check if method already exists
-  const existingMethod = await prisma.withdrawalMethod.findFirst({
-    where: {
-      userId: sellerId,
-      method,
-      ...(method === 'BANK_ACCOUNT' && { accountNumber: encrypt(accountNumber) }),
-      ...(method === 'MOBILE_MONEY' && { mobileNumber: encrypt(mobileNumber) }),
-      ...(method === 'PAYPAL' && { paypalEmail: encrypt(paypalEmail) }),
-    },
+  // --- FIX: SECURE DUPLICATE CHECK ---
+  // Since we use non-deterministic encryption, we cannot query by encrypted string.
+  // We must fetch user's existing methods and decrypt to compare.
+  const existingMethods = await prisma.withdrawalMethod.findMany({
+    where: { userId: sellerId, method }
   });
 
-  if (existingMethod) {
+  const isDuplicate = existingMethods.some(m => {
+    try {
+      if (method === 'BANK_ACCOUNT') return decrypt(m.accountNumber) === accountNumber;
+      if (method === 'MOBILE_MONEY') return decrypt(m.mobileNumber) === mobileNumber;
+      if (method === 'PAYPAL') return decrypt(m.paypalEmail) === paypalEmail;
+    } catch (e) { return false; } // Ignore decryption errors on old data
+    return false;
+  });
+
+  if (isDuplicate) {
     throw new ConflictError('This withdrawal method already exists');
   }
+  // -----------------------------------
 
   // If setting as default, unset other defaults
   if (setAsDefault) {
@@ -90,7 +82,6 @@ export const addWithdrawalMethod = async (req, res) => {
     });
   }
 
-  // Create withdrawal method with encrypted sensitive data
   const withdrawalMethod = await prisma.withdrawalMethod.create({
     data: {
       userId: sellerId,
@@ -121,12 +112,6 @@ export const addWithdrawalMethod = async (req, res) => {
     },
   });
 
-  logger.info('Withdrawal method added', {
-    userId: sellerId,
-    methodId: withdrawalMethod.id,
-    method,
-  });
-
   res.status(201).json({
     success: true,
     message: 'Withdrawal method added successfully',
@@ -137,6 +122,54 @@ export const addWithdrawalMethod = async (req, res) => {
         accountName: withdrawalMethod.accountName,
         isDefault: withdrawalMethod.isDefault,
         isVerified: withdrawalMethod.isVerified,
+      },
+    },
+  });
+};
+
+/**
+ * Request withdrawal
+ * FIX: Logic moved to Service to fix code duplication and race conditions
+ */
+export const requestWithdrawal = async (req, res) => {
+  const sellerId = req.user.id;
+  const { amount, methodId } = req.body;
+
+  // Delegate entirely to service to ensure ACID properties and centralized fee logic
+  const withdrawal = await financeService.requestWithdrawal(sellerId, { amount, methodId });
+
+  // Audit Log
+  await prisma.auditLog.create({
+    data: {
+      userId: sellerId,
+      action: 'WITHDRAWAL_REQUESTED',
+      entity: 'Withdrawal',
+      entityId: withdrawal.id,
+      metadata: {
+        amount: withdrawal.amount,
+        fee: withdrawal.fee,
+        netAmount: withdrawal.netAmount
+      },
+    },
+  });
+
+  logger.info('Withdrawal requested', {
+    userId: sellerId,
+    withdrawalId: withdrawal.id,
+    amount: withdrawal.amount
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Withdrawal request submitted successfully',
+    data: {
+      withdrawal: {
+        id: withdrawal.id,
+        reference: withdrawal.reference,
+        amount: withdrawal.amount,
+        fee: withdrawal.fee,
+        netAmount: withdrawal.netAmount,
+        status: withdrawal.status,
       },
     },
   });
@@ -448,152 +481,152 @@ export const removeWithdrawalMethod = async (req, res) => {
   });
 };
 
-/**
- * Request withdrawal
- */
-export const requestWithdrawal = async (req, res) => {
-  const sellerId = req.user.id;
-  const { amount, methodId } = req.body;
+// /**
+//  * Request withdrawal
+//  */
+// export const requestWithdrawal = async (req, res) => {
+//   const sellerId = req.user.id;
+//   const { amount, methodId } = req.body;
 
-  // Validate amount
-  if (!amount || amount <= 0) {
-    throw new ValidationError('Invalid withdrawal amount');
-  }
+//   // Validate amount
+//   if (!amount || amount <= 0) {
+//     throw new ValidationError('Invalid withdrawal amount');
+//   }
 
-  // Minimum withdrawal amount
-  const minWithdrawal = 10;
-  if (amount < minWithdrawal) {
-    throw new ValidationError(`Minimum withdrawal amount is $${minWithdrawal}`);
-  }
+//   // Minimum withdrawal amount
+//   const minWithdrawal = 10;
+//   if (amount < minWithdrawal) {
+//     throw new ValidationError(`Minimum withdrawal amount is $${minWithdrawal}`);
+//   }
 
-  // Get finance record
-  const finance = await prisma.finance.findUnique({
-    where: { sellerId },
-  });
+//   // Get finance record
+//   const finance = await prisma.finance.findUnique({
+//     where: { sellerId },
+//   });
 
-  if (!finance) {
-    throw new NotFoundError('Finance record not found');
-  }
+//   if (!finance) {
+//     throw new NotFoundError('Finance record not found');
+//   }
 
-  // Check available balance
-  if (amount > finance.availableBalance) {
-    throw new ValidationError(`Insufficient balance. Available: $${finance.availableBalance}`);
-  }
+//   // Check available balance
+//   if (amount > finance.availableBalance) {
+//     throw new ValidationError(`Insufficient balance. Available: $${finance.availableBalance}`);
+//   }
 
-  // Get withdrawal method
-  const withdrawalMethod = await prisma.withdrawalMethod.findUnique({
-    where: { id: methodId },
-  });
+//   // Get withdrawal method
+//   const withdrawalMethod = await prisma.withdrawalMethod.findUnique({
+//     where: { id: methodId },
+//   });
 
-  if (!withdrawalMethod) {
-    throw new NotFoundError('Withdrawal method');
-  }
+//   if (!withdrawalMethod) {
+//     throw new NotFoundError('Withdrawal method');
+//   }
 
-  if (withdrawalMethod.userId !== sellerId) {
-    throw new AuthorizationError('Invalid withdrawal method');
-  }
+//   if (withdrawalMethod.userId !== sellerId) {
+//     throw new AuthorizationError('Invalid withdrawal method');
+//   }
 
-  if (!withdrawalMethod.isVerified) {
-    throw new ValidationError('Withdrawal method is not verified');
-  }
+//   if (!withdrawalMethod.isVerified) {
+//     throw new ValidationError('Withdrawal method is not verified');
+//   }
 
-  // Calculate withdrawal fee (2% or minimum $1)
-  const feePercentage = 0.02;
-  const minFee = 1;
-  const fee = Math.max(amount * feePercentage, minFee);
-  const netAmount = amount - fee;
+//   // Calculate withdrawal fee (2% or minimum $1)
+//   const feePercentage = 0.02;
+//   const minFee = 1;
+//   const fee = Math.max(amount * feePercentage, minFee);
+//   const netAmount = amount - fee;
 
-  // Create withdrawal request
-  const withdrawal = await prisma.$transaction(async (tx) => {
-    // Create withdrawal
-    const newWithdrawal = await tx.withdrawal.create({
-      data: {
-        financeId: finance.id,
-        methodId,
-        amount,
-        fee,
-        netAmount,
-        status: 'PENDING',
-        reference: generateUniqueId('WTH'),
-        metadata: {
-          requestedAt: new Date().toISOString(),
-          ipAddress: req.ip,
-        },
-      },
-    });
+//   // Create withdrawal request
+//   const withdrawal = await prisma.$transaction(async (tx) => {
+//     // Create withdrawal
+//     const newWithdrawal = await tx.withdrawal.create({
+//       data: {
+//         financeId: finance.id,
+//         methodId,
+//         amount,
+//         fee,
+//         netAmount,
+//         status: 'PENDING',
+//         reference: generateUniqueId('WTH'),
+//         metadata: {
+//           requestedAt: new Date().toISOString(),
+//           ipAddress: req.ip,
+//         },
+//       },
+//     });
 
-    // Update finance balances
-    await tx.finance.update({
-      where: { id: finance.id },
-      data: {
-        availableBalance: { decrement: amount },
-        pendingBalance: { increment: amount },
-      },
-    });
+//     // Update finance balances
+//     await tx.finance.update({
+//       where: { id: finance.id },
+//       data: {
+//         availableBalance: { decrement: amount },
+//         pendingBalance: { increment: amount },
+//       },
+//     });
 
-    // Create transaction record
-    await tx.transaction.create({
-      data: {
-        financeId: finance.id,
-        userId: sellerId,
-        type: 'WITHDRAWAL',
-        amount,
-        balanceBefore: finance.availableBalance,
-        balanceAfter: Number(finance.availableBalance) - amount,
-        reference: newWithdrawal.reference,
-        description: `Withdrawal request to ${withdrawalMethod.method}`,
-      },
-    });
+//     // Create transaction record
+//     await tx.transaction.create({
+//       data: {
+//         financeId: finance.id,
+//         userId: sellerId,
+//         type: 'WITHDRAWAL',
+//         amount,
+//         balanceBefore: finance.availableBalance,
+//         balanceAfter: Number(finance.availableBalance) - amount,
+//         reference: newWithdrawal.reference,
+//         description: `Withdrawal request to ${withdrawalMethod.method}`,
+//       },
+//     });
 
-    return newWithdrawal;
-  });
+//     return newWithdrawal;
+//   });
 
-  // Queue withdrawal processing
-  await financeQueue.processWithdrawal({
-    withdrawalId: withdrawal.id,
-    sellerId,
-    amount,
-    methodId,
-  });
+//   // Queue withdrawal processing
+//   await financeQueue.processWithdrawal({
+//     withdrawalId: withdrawal.id,
+//     sellerId,
+//     amount,
+//     methodId,
+//   });
 
-  // Log audit event
-  await prisma.auditLog.create({
-    data: {
-      userId: sellerId,
-      action: 'WITHDRAWAL_REQUESTED',
-      entity: 'Withdrawal',
-      entityId: withdrawal.id,
-      metadata: {
-        amount,
-        fee,
-        netAmount,
-        method: withdrawalMethod.method,
-      },
-    },
-  });
+//   // Log audit event
+//   await prisma.auditLog.create({
+//     data: {
+//       userId: sellerId,
+//       action: 'WITHDRAWAL_REQUESTED',
+//       entity: 'Withdrawal',
+//       entityId: withdrawal.id,
+//       metadata: {
+//         amount,
+//         fee,
+//         netAmount,
+//         method: withdrawalMethod.method,
+//       },
+//     },
+//   });
 
-  logger.info('Withdrawal requested', {
-    userId: sellerId,
-    withdrawalId: withdrawal.id,
-    amount,
-    netAmount,
-  });
+//   logger.info('Withdrawal requested', {
+//     userId: sellerId,
+//     withdrawalId: withdrawal.id,
+//     amount,
+//     netAmount,
+//   });
 
-  res.status(201).json({
-    success: true,
-    message: 'Withdrawal request submitted successfully',
-    data: {
-      withdrawal: {
-        id: withdrawal.id,
-        reference: withdrawal.reference,
-        amount: withdrawal.amount,
-        fee: withdrawal.fee,
-        netAmount: withdrawal.netAmount,
-        status: withdrawal.status,
-      },
-    },
-  });
-};
+//   res.status(201).json({
+//     success: true,
+//     message: 'Withdrawal request submitted successfully',
+//     data: {
+//       withdrawal: {
+//         id: withdrawal.id,
+//         reference: withdrawal.reference,
+//         amount: withdrawal.amount,
+//         fee: withdrawal.fee,
+//         netAmount: withdrawal.netAmount,
+//         status: withdrawal.status,
+//       },
+//     },
+//   });
+// };
 
 /**
  * Get withdrawal history
@@ -721,127 +754,289 @@ export const getTransactionHistory = async (req, res) => {
   });
 };
 
-/**
- * Get revenue analytics
- */
+// /**
+//  * Get revenue analytics
+//  */
+// export const getRevenueAnalytics = async (req, res) => {
+//   const sellerId = req.user.id;
+//   const { period = '30d', groupBy = 'day' } = req.query;
+
+//   // Calculate date range
+//   let startDate;
+//   switch (period) {
+//     case '7d':
+//       startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+//       break;
+//     case '30d':
+//       startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+//       break;
+//     case '90d':
+//       startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+//       break;
+//     case '1y':
+//       startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+//       break;
+//     default:
+//       startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+//   }
+
+//   // Get revenue data grouped by period
+//   let revenueData;
+//   if (groupBy === 'day') {
+//     revenueData = await prisma.$queryRaw`
+//       SELECT 
+//         DATE(created_at) as date,
+//         SUM(CASE WHEN type = 'SALE' THEN amount ELSE 0 END) as revenue,
+//         SUM(CASE WHEN type = 'REFUND' THEN amount ELSE 0 END) as refunds,
+//         SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END) as withdrawals,
+//         COUNT(CASE WHEN type = 'SALE' THEN 1 END) as sales_count
+//       FROM transactions
+//       WHERE user_id = ${sellerId}
+//         AND created_at >= ${startDate}
+//       GROUP BY DATE(created_at)
+//       ORDER BY date DESC
+//     `;
+//   } else if (groupBy === 'week') {
+//     revenueData = await prisma.$queryRaw`
+//       SELECT 
+//         DATE_TRUNC('week', created_at) as week,
+//         SUM(CASE WHEN type = 'SALE' THEN amount ELSE 0 END) as revenue,
+//         SUM(CASE WHEN type = 'REFUND' THEN amount ELSE 0 END) as refunds,
+//         SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END) as withdrawals,
+//         COUNT(CASE WHEN type = 'SALE' THEN 1 END) as sales_count
+//       FROM transactions
+//       WHERE user_id = ${sellerId}
+//         AND created_at >= ${startDate}
+//       GROUP BY DATE_TRUNC('week', created_at)
+//       ORDER BY week DESC
+//     `;
+//   } else {
+//     revenueData = await prisma.$queryRaw`
+//       SELECT 
+//         DATE_TRUNC('month', created_at) as month,
+//         SUM(CASE WHEN type = 'SALE' THEN amount ELSE 0 END) as revenue,
+//         SUM(CASE WHEN type = 'REFUND' THEN amount ELSE 0 END) as refunds,
+//         SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END) as withdrawals,
+//         COUNT(CASE WHEN type = 'SALE' THEN 1 END) as sales_count
+//       FROM transactions
+//       WHERE user_id = ${sellerId}
+//         AND created_at >= ${startDate}
+//       GROUP BY DATE_TRUNC('month', created_at)
+//       ORDER BY month DESC
+//     `;
+//   }
+
+//   // Get top performing campaigns
+//   const topCampaigns = await prisma.$queryRaw`
+//     SELECT 
+//       tc.id,
+//       tc.title,
+//       COUNT(DISTINCT b.id) as bookings,
+//       SUM(t.amount) as revenue
+//     FROM ticket_campaigns tc
+//     JOIN bookings b ON b.campaign_id = tc.id
+//     JOIN payments p ON p.booking_id = b.id
+//     JOIN transactions t ON t.payment_id = p.id
+//     WHERE tc.seller_id = ${sellerId}
+//       AND t.type = 'SALE'
+//       AND t.created_at >= ${startDate}
+//     GROUP BY tc.id, tc.title
+//     ORDER BY revenue DESC
+//     LIMIT 5
+//   `;
+
+//   // Get summary statistics
+//   const summary = await prisma.transaction.aggregate({
+//     where: {
+//       userId: sellerId,
+//       createdAt: { gte: startDate },
+//     },
+//     _sum: {
+//       amount: true,
+//     },
+//     _count: {
+//       id: true,
+//     },
+//   });
+
+//   res.status(200).json({
+//     success: true,
+//     data: {
+//       period,
+//       groupBy,
+//       revenue: revenueData,
+//       topCampaigns,
+//       summary: {
+//         totalRevenue: summary._sum.amount || 0,
+//         totalTransactions: summary._count.id || 0,
+//         averageTransaction: summary._count.id > 0 
+//           ? (summary._sum.amount / summary._count.id).toFixed(2)
+//           : 0,
+//       },
+//     },
+//   });
+// };
+
 export const getRevenueAnalytics = async (req, res) => {
   const sellerId = req.user.id;
   const { period = '30d', groupBy = 'day' } = req.query;
 
-  // Calculate date range
-  let startDate;
-  switch (period) {
-    case '7d':
-      startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      break;
-    case '30d':
-      startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      break;
-    case '90d':
-      startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-      break;
-    case '1y':
-      startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-      break;
-    default:
-      startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  }
+  // 1. Calculate Date Range
+  const now = new Date();
+  let startDate = new Date();
+  const daysMap = { '7d': 7, '30d': 30, '90d': 90, '1y': 365 };
+  startDate.setDate(now.getDate() - (daysMap[period] || 30));
 
-  // Get revenue data grouped by period
-  let revenueData;
-  if (groupBy === 'day') {
-    revenueData = await prisma.$queryRaw`
-      SELECT 
-        DATE(created_at) as date,
-        SUM(CASE WHEN type = 'SALE' THEN amount ELSE 0 END) as revenue,
-        SUM(CASE WHEN type = 'REFUND' THEN amount ELSE 0 END) as refunds,
-        SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END) as withdrawals,
-        COUNT(CASE WHEN type = 'SALE' THEN 1 END) as sales_count
-      FROM transactions
-      WHERE user_id = ${sellerId}
-        AND created_at >= ${startDate}
-      GROUP BY DATE(created_at)
-      ORDER BY date DESC
-    `;
-  } else if (groupBy === 'week') {
-    revenueData = await prisma.$queryRaw`
-      SELECT 
-        DATE_TRUNC('week', created_at) as week,
-        SUM(CASE WHEN type = 'SALE' THEN amount ELSE 0 END) as revenue,
-        SUM(CASE WHEN type = 'REFUND' THEN amount ELSE 0 END) as refunds,
-        SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END) as withdrawals,
-        COUNT(CASE WHEN type = 'SALE' THEN 1 END) as sales_count
-      FROM transactions
-      WHERE user_id = ${sellerId}
-        AND created_at >= ${startDate}
-      GROUP BY DATE_TRUNC('week', created_at)
-      ORDER BY week DESC
-    `;
-  } else {
-    revenueData = await prisma.$queryRaw`
-      SELECT 
-        DATE_TRUNC('month', created_at) as month,
-        SUM(CASE WHEN type = 'SALE' THEN amount ELSE 0 END) as revenue,
-        SUM(CASE WHEN type = 'REFUND' THEN amount ELSE 0 END) as refunds,
-        SUM(CASE WHEN type = 'WITHDRAWAL' THEN amount ELSE 0 END) as withdrawals,
-        COUNT(CASE WHEN type = 'SALE' THEN 1 END) as sales_count
-      FROM transactions
-      WHERE user_id = ${sellerId}
-        AND created_at >= ${startDate}
-      GROUP BY DATE_TRUNC('month', created_at)
-      ORDER BY month DESC
-    `;
-  }
-
-  // Get top performing campaigns
-  const topCampaigns = await prisma.$queryRaw`
-    SELECT 
-      tc.id,
-      tc.title,
-      COUNT(DISTINCT b.id) as bookings,
-      SUM(t.amount) as revenue
-    FROM ticket_campaigns tc
-    JOIN bookings b ON b.campaign_id = tc.id
-    JOIN payments p ON p.booking_id = b.id
-    JOIN transactions t ON t.payment_id = p.id
-    WHERE tc.seller_id = ${sellerId}
-      AND t.type = 'SALE'
-      AND t.created_at >= ${startDate}
-    GROUP BY tc.id, tc.title
-    ORDER BY revenue DESC
-    LIMIT 5
-  `;
-
-  // Get summary statistics
-  const summary = await prisma.transaction.aggregate({
-    where: {
-      userId: sellerId,
-      createdAt: { gte: startDate },
-    },
-    _sum: {
-      amount: true,
-    },
-    _count: {
-      id: true,
-    },
-  });
-
-  res.status(200).json({
-    success: true,
-    data: {
-      period,
-      groupBy,
-      revenue: revenueData,
-      topCampaigns,
-      summary: {
-        totalRevenue: summary._sum.amount || 0,
-        totalTransactions: summary._count.id || 0,
-        averageTransaction: summary._count.id > 0 
-          ? (summary._sum.amount / summary._count.id).toFixed(2)
-          : 0,
+  try {
+    // 2. Fetch ALL relevant data (Pure Prisma)
+    // We only select the fields we strictly need to save memory
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        userId: sellerId,
+        createdAt: { gte: startDate },
+        type: { in: ['SALE', 'REFUND', 'WITHDRAWAL'] }
       },
-    },
-  });
+      select: {
+        amount: true,
+        type: true,
+        createdAt: true
+      },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    // 3. Process Data in JavaScript (The "Map-Reduce" step)
+    const groupedData = transactions.reduce((acc, tx) => {
+      // Determine the key based on grouping (Day, Week, or Month)
+      let key;
+      const date = new Date(tx.createdAt);
+      
+      if (groupBy === 'day') {
+        key = date.toISOString().split('T')[0]; // "2023-12-15"
+      } else if (groupBy === 'week') {
+        // Get the Monday of the week
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+        d.setDate(diff);
+        key = d.toISOString().split('T')[0];
+      } else {
+        key = date.toISOString().slice(0, 7); // "2023-12"
+      }
+
+      // Initialize group if missing
+      if (!acc[key]) {
+        acc[key] = { 
+          date: key, 
+          revenue: 0, 
+          refunds: 0, 
+          withdrawals: 0, 
+          sales_count: 0 
+        };
+      }
+
+      // Aggregate values
+      const amount = Number(tx.amount); // Ensure it's a number
+      if (tx.type === 'SALE') {
+        acc[key].revenue += amount;
+        acc[key].sales_count += 1;
+      } else if (tx.type === 'REFUND') {
+        acc[key].refunds += amount;
+      } else if (tx.type === 'WITHDRAWAL') {
+        acc[key].withdrawals += amount;
+      }
+
+      return acc;
+    }, {});
+
+    // Convert object back to array and sort
+    const revenueData = Object.values(groupedData).sort((a, b) => 
+      new Date(b.date) - new Date(a.date)
+    );
+
+    // 4. Get Top Campaigns (Pure Prisma)
+    const topCampaignsRaw = await prisma.ticketCampaign.findMany({
+      where: { sellerId },
+      select: {
+        id: true,
+        title: true,
+        bookings: {
+          where: {
+            payment: {
+              transaction: {
+                type: 'SALE',
+                createdAt: { gte: startDate }
+              }
+            }
+          },
+          select: {
+            payment: {
+              select: {
+                transaction: {
+                  select: { amount: true }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    // Calculate totals for campaigns in JS
+    const topCampaigns = topCampaignsRaw
+      .map(campaign => {
+        const bookings = campaign.bookings || [];
+        // Flatten the structure to get revenue
+        const revenue = bookings.reduce((sum, booking) => {
+          const txAmount = Number(booking.payment?.transaction?.amount || 0);
+          return sum + txAmount;
+        }, 0);
+
+        return {
+          id: campaign.id,
+          title: campaign.title,
+          bookings: bookings.length,
+          revenue
+        };
+      })
+      .filter(c => c.revenue > 0) // Only show active campaigns
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 5);
+
+
+    // 5. Summary Statistics (Prisma Aggregate is safe and fast)
+    const summary = await prisma.transaction.aggregate({
+      where: {
+        userId: sellerId,
+        createdAt: { gte: startDate },
+      },
+      _sum: { amount: true },
+      _count: { id: true },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        period,
+        groupBy,
+        revenue: revenueData,
+        topCampaigns,
+        summary: {
+          totalRevenue: summary._sum.amount || 0,
+          totalTransactions: summary._count.id || 0,
+          averageTransaction: summary._count.id > 0 
+            ? (Number(summary._sum.amount) / summary._count.id).toFixed(2)
+            : 0,
+        },
+      },
+    });
+
+  } catch (error) {
+    logger.error('Revenue analytics failed:', { sellerId, error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve analytics'
+    });
+  }
 };
 
 /**

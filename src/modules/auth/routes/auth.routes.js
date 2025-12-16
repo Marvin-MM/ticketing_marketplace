@@ -21,6 +21,7 @@ import {
   createManager,
   acceptManagerInvitation,
   deactivateManager,
+  getSellerManagers,
   profile,
 } from '../controllers/auth.controller.js';
 import {
@@ -69,6 +70,7 @@ router.post('/approve-seller/:applicationId', ensureRoles('SUPER_ADMIN'), valida
 
 // Manager management routes
 router.post('/create-manager', ensureRoles('SELLER'), validateRequest(createManagerSchema), asyncHandler(createManager));
+router.get('/seller-managers', ensureRoles('SELLER'), asyncHandler(getSellerManagers));
 router.post('/accept-invitation', validateRequest(acceptInvitationSchema), asyncHandler(acceptManagerInvitation));
 router.post('/deactivate-manager/:managerId', ensureRoles('SELLER'), asyncHandler(deactivateManager));
 

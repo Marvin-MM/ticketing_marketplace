@@ -45,7 +45,7 @@ router.post('/:bookingId/cancel-enhanced', ensureAuthenticated, validateEnhanced
 router.post('/waitlist/:campaignId', ensureAuthenticated, validateWaitlistEntry, asyncHandler(addToWaitlist));
 
 // Analytics routes
-router.get('/analytics/real-time', ensureRoles(['SUPER_ADMIN', 'SELLER']), asyncHandler(getRealTimeBookingMetrics));
+router.get('/analytics/real-time', ensureRoles('SUPER_ADMIN', 'SELLER'), asyncHandler(getRealTimeBookingMetrics));
 router.get('/analytics/seller', ensureRoles('SELLER'), asyncHandler(getSellerBookingAnalytics));
 router.get('/analytics/platform', ensureRoles('SUPER_ADMIN'), asyncHandler(getPlatformBookingAnalytics));
 router.get('/campaign/:campaignId/analytics-enhanced', ensureRoles('SELLER'), asyncHandler(getEnhancedCampaignBookingAnalytics));

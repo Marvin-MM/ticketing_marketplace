@@ -7,6 +7,7 @@ import {
 } from '../../../shared/errors/AppError.js';
 import { generateUniqueId } from '../../../shared/utils/encryption.js';
 import paymentService from '../services/paymentService.js';
+import pesapalProvider from '../providers/pesapal.provider.js';
 import paymentAnalyticsService from '../services/paymentAnalyticsService.js';
 
 /**

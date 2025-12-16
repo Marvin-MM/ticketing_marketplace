@@ -614,11 +614,68 @@ export const enhancedCancelBooking = async (req, res) => {
 /**
  * Get booking statistics for a campaign (Seller only)
  */
+// export const getCampaignBookingStats = async (req, res) => {
+//   const { campaignId } = req.params;
+//   const sellerId = req.user.id;
+
+//   // Verify campaign ownership
+//   const campaign = await prisma.ticketCampaign.findUnique({
+//     where: { id: campaignId },
+//     select: { sellerId: true },
+//   });
+
+//   if (!campaign) {
+//     throw new NotFoundError('Campaign');
+//   }
+
+//   if (campaign.sellerId !== sellerId) {
+//     throw new BookingError('You can only view statistics for your own campaigns');
+//   }
+
+//   // Get booking statistics
+//   const stats = await prisma.booking.groupBy({
+//     by: ['status', 'ticketType'],
+//     where: { campaignId },
+//     _count: {
+//       id: true,
+//     },
+//     _sum: {
+//       quantity: true,
+//       totalAmount: true,
+//     },
+//   });
+
+//   // Get time-based statistics
+//   const dailyBookings = await prisma.$queryRaw`
+//     SELECT 
+//       DATE(created_at) as date,
+//       COUNT(*) as bookings,
+//       SUM(quantity) as tickets,
+//       SUM(total_amount) as revenue
+//     FROM bookings
+//     WHERE campaign_id = ${campaignId}
+//       AND status = 'CONFIRMED'
+//     GROUP BY DATE(created_at)
+//     ORDER BY date DESC
+//     LIMIT 30
+//   `;
+
+//   res.status(200).json({
+//     success: true,
+//     data: {
+//       summary: stats,
+//       dailyTrend: dailyBookings,
+//     },
+//   });
+// };
+
+
 export const getCampaignBookingStats = async (req, res) => {
   const { campaignId } = req.params;
   const sellerId = req.user.id;
 
-  // Verify campaign ownership
+  // 1. Validation & Authorization
+  // Best Practice: Select only the absolute minimum fields needed for auth checks
   const campaign = await prisma.ticketCampaign.findUnique({
     where: { id: campaignId },
     select: { sellerId: true },
@@ -632,7 +689,8 @@ export const getCampaignBookingStats = async (req, res) => {
     throw new BookingError('You can only view statistics for your own campaigns');
   }
 
-  // Get booking statistics
+  // 2. Aggregation using Prisma Native API (Best for type safety)
+  // This part of your code was mostly correct, just ensure the fields exist
   const stats = await prisma.booking.groupBy({
     by: ['status', 'ticketType'],
     where: { campaignId },
@@ -645,21 +703,24 @@ export const getCampaignBookingStats = async (req, res) => {
     },
   });
 
-  // Get time-based statistics
+  // 3. Time-Series Data using Raw SQL (Corrected)
+  // Best Practice: Use double quotes for specific columns to preserve case sensitivity in Postgres
+  // Best Practice: Cast SUMs to INT or FLOAT to avoid BigInt serialization errors in JSON
   const dailyBookings = await prisma.$queryRaw`
     SELECT 
-      DATE(created_at) as date,
-      COUNT(*) as bookings,
-      SUM(quantity) as tickets,
-      SUM(total_amount) as revenue
-    FROM bookings
-    WHERE campaign_id = ${campaignId}
-      AND status = 'CONFIRMED'
-    GROUP BY DATE(created_at)
+      DATE("createdAt") as date,
+      COUNT(*)::int as bookings,
+      SUM("quantity")::int as tickets,
+      SUM("totalAmount")::int as revenue
+    FROM "bookings"
+    WHERE "campaignId" = ${campaignId}
+      AND "status" = 'CONFIRMED'
+    GROUP BY DATE("createdAt")
     ORDER BY date DESC
     LIMIT 30
   `;
 
+  // 4. Response
   res.status(200).json({
     success: true,
     data: {

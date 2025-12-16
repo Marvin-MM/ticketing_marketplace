@@ -11,27 +11,20 @@ import {
   ConflictError,
 } from '../../../shared/errors/AppError.js';
 
-/**
- * Enhanced Finance Service with comprehensive financial management
- */
 class financeService {
   /**
    * Get comprehensive financial dashboard for seller
    */
   async getFinancialDashboard(sellerId, filters = {}) {
     const { period = '30d', currency = 'USD' } = filters;
-    
     const cacheKey = `finance_dashboard:${sellerId}:${period}:${currency}`;
+    
     const cached = await cache.get(cacheKey);
-    if (cached) {
-      return JSON.parse(cached);
-    }
+    if (cached) return JSON.parse(cached);
 
     try {
-      // Get or create finance record
       const finance = await this._getOrCreateFinanceRecord(sellerId);
 
-      // Get comprehensive financial data
       const [
         financialSummary,
         recentTransactions,
@@ -43,20 +36,18 @@ class financeService {
         cashflowAnalysis
       ] = await Promise.all([
         this._getFinancialSummary(finance, period),
-        // this._getRecentTransactions(sellerId, 15),
-        // this._getWithdrawalMethods(sellerId),
-        // this._getRevenueAnalytics(sellerId, period),
-        // this._getPendingWithdrawals(finance.id),
-        // this._getTaxSummary(sellerId, period),
-        // this._getCommissionBreakdown(sellerId, period),
-        // this._getCashflowAnalysis(sellerId, period)
+        this._getRecentTransactions(sellerId, 15),
+        this._getWithdrawalMethods(sellerId),
+        this._getRevenueAnalytics(sellerId, period),
+        this._getPendingWithdrawals(finance.id),
+        this._getTaxSummary(sellerId, period),
+        this._getCommissionBreakdown(sellerId, period),
+        this._getCashflowAnalysis(sellerId, period)
       ]);
 
       const dashboard = {
         finance: {
           ...finance,
-          availableForWithdrawal: await this._calculateAvailableForWithdrawal(finance),
-          estimatedTaxes: taxSummary.estimatedTaxes,
           nextPayoutDate: await this._calculateNextPayoutDate(sellerId)
         },
         summary: financialSummary,
@@ -70,9 +61,7 @@ class financeService {
         generatedAt: new Date()
       };
 
-      // Cache for 15 minutes
-      await cache.set(cacheKey, JSON.stringify(dashboard), 900);
-
+      await cache.set(cacheKey, JSON.stringify(dashboard), 900); // 15 min cache
       return dashboard;
 
     } catch (error) {
@@ -82,27 +71,117 @@ class financeService {
   }
 
   /**
-   * Process automated withdrawal with enhanced validation
+   * NEW: Unified Manual Withdrawal Request
+   * Replaces logic previously duplicated in controller
+   */
+  async requestWithdrawal(sellerId, { amount, methodId }) {
+    // 1. Validation & Eligibility (Balance check happens atomically later)
+    await this._validateWithdrawalEligibility(sellerId, amount, methodId);
+
+    const [finance, method] = await Promise.all([
+      this._getFinanceRecord(sellerId),
+      this._getWithdrawalMethod(methodId, sellerId)
+    ]);
+
+    // 2. Calculate Fees
+    const { totalFee, netAmount } = await this._calculateWithdrawalFees(amount, method.method, 'NORMAL');
+
+    // 3. Atomic Transaction (Prevents Double Spending)
+    return await prisma.$transaction(async (tx) => {
+      // Atomic Update: Only proceeds if balance is sufficient
+      const updatedFinance = await tx.finance.updateMany({
+        where: { 
+          id: finance.id,
+          availableBalance: { gte: amount } // CRITICAL: Database-level check
+        },
+        data: {
+          availableBalance: { decrement: amount },
+          pendingBalance: { increment: amount },
+        }
+      });
+
+      if (updatedFinance.count === 0) {
+        throw new ValidationError(`Insufficient balance. Available: $${finance.availableBalance}`);
+      }
+
+      // Create Withdrawal Record
+      const newWithdrawal = await tx.withdrawal.create({
+        data: {
+          financeId: finance.id,
+          methodId,
+          amount,
+          fee: totalFee,
+          netAmount,
+          status: 'PENDING',
+          reference: generateUniqueId('WTH'),
+          metadata: {
+            requestedAt: new Date().toISOString(),
+            automatedRequest: false
+          },
+        },
+      });
+
+      // Create Transaction Record
+      await tx.transaction.create({
+        data: {
+          financeId: finance.id,
+          userId: sellerId,
+          type: 'WITHDRAWAL',
+          amount,
+          // Calculate snapshot balances based on the decremented amount
+          balanceBefore: finance.availableBalance, 
+          balanceAfter: Number(finance.availableBalance) - amount,
+          reference: newWithdrawal.reference,
+          description: `Withdrawal request to ${method.method}`,
+        },
+      });
+
+      // Queue Processing
+      await financeQueue.processWithdrawal({
+        withdrawalId: newWithdrawal.id,
+        sellerId,
+        amount,
+        methodId,
+      });
+
+      return newWithdrawal;
+    });
+  }
+
+  /**
+   * Process automated withdrawal
    */
   async processAutomatedWithdrawal(sellerId, withdrawalData) {
     const { amount, methodId, scheduledFor, priority = 'NORMAL' } = withdrawalData;
 
     try {
-      // Enhanced validation
       await this._validateWithdrawalEligibility(sellerId, amount, methodId);
-
-      // Get finance record and withdrawal method
+      
       const [finance, method] = await Promise.all([
         this._getFinanceRecord(sellerId),
         this._getWithdrawalMethod(methodId, sellerId)
       ]);
 
-      // Calculate fees and net amount
       const feeCalculation = await this._calculateWithdrawalFees(amount, method.method, priority);
 
-      // Create withdrawal in transaction
+      // Atomic Transaction
       const withdrawal = await prisma.$transaction(async (tx) => {
-        // Create withdrawal record
+        // Atomic Check & Update
+        const updatedFinance = await tx.finance.updateMany({
+          where: { 
+            id: finance.id, 
+            availableBalance: { gte: amount } 
+          },
+          data: {
+            availableBalance: { decrement: amount },
+            pendingBalance: { increment: amount }
+          }
+        });
+
+        if (updatedFinance.count === 0) {
+           throw new ValidationError(`Insufficient balance for automated withdrawal.`);
+        }
+
         const newWithdrawal = await tx.withdrawal.create({
           data: {
             financeId: finance.id,
@@ -110,7 +189,7 @@ class financeService {
             amount,
             fee: feeCalculation.totalFee,
             netAmount: feeCalculation.netAmount,
-            status: scheduledFor ? 'SCHEDULED' : 'PENDING',
+            status: 'PENDING',
             reference: generateUniqueId('WTH'),
             processedAt: scheduledFor ? new Date(scheduledFor) : null,
             metadata: {
@@ -122,16 +201,6 @@ class financeService {
           }
         });
 
-        // Update finance balances
-        await tx.finance.update({
-          where: { id: finance.id },
-          data: {
-            availableBalance: { decrement: amount },
-            pendingBalance: { increment: amount }
-          }
-        });
-
-        // Create transaction record
         await tx.transaction.create({
           data: {
             financeId: finance.id,
@@ -153,27 +222,11 @@ class financeService {
         return newWithdrawal;
       });
 
-      // Queue withdrawal processing
       await this._queueWithdrawalProcessing(withdrawal, method, priority);
-
-      // Send notification
-      await this._sendWithdrawalNotification(sellerId, withdrawal, 'INITIATED');
-
-      logger.info('Automated withdrawal processed', {
-        sellerId,
-        withdrawalId: withdrawal.id,
-        amount: withdrawal.amount,
-        priority
-      });
-
       return withdrawal;
 
     } catch (error) {
-      logger.error('Automated withdrawal failed:', {
-        sellerId,
-        amount,
-        error: error.message
-      });
+      logger.error('Automated withdrawal failed:', { sellerId, amount, error: error.message });
       throw error;
     }
   }
@@ -677,6 +730,183 @@ class financeService {
 
     return {
       startDate: ranges[period] || ranges['30d'],
+      endDate: now
+    };
+  }
+
+  async _getOrCreateFinanceRecord(sellerId) {
+    // FIX: Use upsert to prevent race conditions during creation
+    return await prisma.finance.upsert({
+      where: { sellerId },
+      update: {}, // No updates needed if found
+      create: {
+        sellerId,
+        totalEarnings: 0,
+        availableBalance: 0,
+        pendingBalance: 0,
+        withdrawnAmount: 0,
+        currency: 'USD'
+      },
+      include: {
+        _count: { select: { withdrawals: true, transactions: true } }
+      }
+    });
+  }
+
+  async _getFinanceRecord(sellerId) {
+    const record = await prisma.finance.findUnique({ where: { sellerId } });
+    if (!record) throw new NotFoundError('Finance record not found');
+    return record;
+  }
+
+  async _getWithdrawalMethod(methodId, sellerId) {
+    const method = await prisma.withdrawalMethod.findUnique({ where: { id: methodId } });
+    if (!method) throw new NotFoundError('Withdrawal method not found');
+    if (method.userId !== sellerId) throw new AuthorizationError('Invalid withdrawal method');
+    return method;
+  }
+
+  async _getWithdrawalMethods(sellerId) {
+    return await prisma.withdrawalMethod.findMany({
+      where: { userId: sellerId },
+      select: {
+        id: true,
+        method: true,
+        accountName: true,
+        bankName: true, // safe to return
+        isDefault: true,
+        isVerified: true
+      }
+    });
+  }
+
+  async _getRecentTransactions(sellerId, limit = 15) {
+    return await prisma.transaction.findMany({
+      where: { userId: sellerId },
+      orderBy: { createdAt: 'desc' },
+      take: limit
+    });
+  }
+
+  async _getPendingWithdrawals(financeId) {
+    return await prisma.withdrawal.findMany({
+      where: { 
+        financeId, 
+        status: { in: ['PENDING', 'PROCESSING'] } 
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+  }
+
+  async _getFinancialSummary(finance, period) {
+    const { startDate } = this._calculateDateRange(period);
+    
+    // Calculate period specific metrics
+    const periodMetrics = await prisma.transaction.groupBy({
+      by: ['type'],
+      where: {
+        userId: finance.sellerId,
+        createdAt: { gte: startDate }
+      },
+      _sum: { amount: true }
+    });
+
+    const getSum = (type) => periodMetrics.find(m => m.type === type)?._sum.amount || 0;
+
+    return {
+      currentBalance: {
+        available: finance.availableBalance,
+        pending: finance.pendingBalance,
+        total: finance.totalEarnings,
+        withdrawn: finance.withdrawnAmount
+      },
+      periodPerformance: {
+        revenue: getSum('SALE'),
+        withdrawals: getSum('WITHDRAWAL'),
+        refunds: getSum('REFUND'),
+        netIncome: getSum('SALE') - getSum('REFUND')
+      }
+    };
+  }
+
+async _getRevenueAnalytics(sellerId, period) {
+    const { startDate } = this._calculateDateRange(period);
+    
+    // FIX 2: Changed snake_case to "camelCase" with double quotes.
+    // In Postgres, unquoted text is lowercase, quoted text preserves case.
+    return await prisma.$queryRaw`
+      SELECT 
+        DATE("createdAt") as date, 
+        SUM(CASE WHEN "type" = 'SALE' THEN "amount" ELSE 0 END) as revenue,
+        SUM(CASE WHEN "type" = 'REFUND' THEN "amount" ELSE 0 END) as refunds,
+        SUM(CASE WHEN "type" = 'WITHDRAWAL' THEN "amount" ELSE 0 END) as withdrawals,
+        COUNT(CASE WHEN "type" = 'SALE' THEN 1 END) as sales_count
+      FROM "transactions"
+      WHERE "userId" = ${sellerId} 
+        AND "createdAt" >= ${startDate}
+      GROUP BY DATE("createdAt")
+      ORDER BY date ASC
+    `;
+  }
+
+  // Placeholder implementations for simpler logic
+  async _getTaxSummary(sellerId, period) { return { estimatedTaxes: 0, status: 'ESTIMATED' }; }
+  async _getCommissionBreakdown(sellerId, period) { return { total: 0, effectiveRate: 0 }; }
+  async _getCashflowAnalysis(sellerId, period) { return { inflow: 0, outflow: 0 }; }
+  
+  async _calculateNextPayoutDate(sellerId) {
+    // Logic: Next Friday
+    const d = new Date();
+    d.setDate(d.getDate() + (5 + 7 - d.getDay()) % 7);
+    return d.toISOString();
+  }
+
+  async _validateWithdrawalEligibility(sellerId, amount, methodId) {
+    const minWithdrawal = config.finance.minimumWithdrawal || 10;
+    
+    if (!amount || amount <= 0) throw new ValidationError('Invalid amount');
+    if (amount < minWithdrawal) throw new ValidationError(`Minimum withdrawal is $${minWithdrawal}`);
+
+    // Check verification
+    const method = await this._getWithdrawalMethod(methodId, sellerId);
+    if (!method.isVerified) throw new ValidationError('Withdrawal method is not verified');
+
+    // Note: Balance check is skipped here and done atomically in transaction
+  }
+
+  async _calculateWithdrawalFees(amount, method, priority) {
+    const feesConfig = config.finance?.withdrawalFees || { BANK_ACCOUNT: 0.02, MOBILE_MONEY: 0.03, PAYPAL: 0.04 };
+    const baseRate = feesConfig[method] || 0.02;
+    
+    const priorityMultiplier = priority === 'URGENT' ? 1.5 : 1.0;
+    const baseFee = Math.max(amount * baseRate * priorityMultiplier, 1); // Minimum $1 fee
+    const processingFee = priority === 'URGENT' ? 5.00 : 0;
+    
+    const totalFee = baseFee + processingFee;
+    return {
+      totalFee,
+      netAmount: amount - totalFee,
+      breakdown: { baseFee, processingFee, rate: baseRate }
+    };
+  }
+
+  async _queueWithdrawalProcessing(withdrawal, method, priority) {
+    const delay = priority === 'URGENT' ? 0 : (config.finance?.standardProcessingDelay || 60000);
+    await financeQueue.processWithdrawal({
+      withdrawalId: withdrawal.id,
+      methodId: method.id,
+      amount: withdrawal.amount,
+      priority,
+      processAfter: Date.now() + delay
+    });
+  }
+
+  _calculateDateRange(period, startDate, endDate) {
+    if (startDate && endDate) return { startDate: new Date(startDate), endDate: new Date(endDate) };
+    const now = new Date();
+    const days = period === '7d' ? 7 : period === '90d' ? 90 : period === '1y' ? 365 : 30;
+    return {
+      startDate: new Date(now.getTime() - days * 24 * 60 * 60 * 1000),
       endDate: now
     };
   }

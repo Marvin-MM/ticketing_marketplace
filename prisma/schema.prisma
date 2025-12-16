@@ -83,6 +83,12 @@ enum NotificationType {
   IN_APP
 }
 
+enum RefundStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // Main User model - Supports both Google OAuth and traditional auth
 model User {
   id                      String              @id @default(cuid())
@@ -272,6 +278,7 @@ model Booking {
   campaign            TicketCampaign      @relation(fields: [campaignId], references: [id])
   payment             Payment?
   tickets             Ticket[]
+  refundRequests      RefundRequest[]
 
   @@index([customerId])
   @@index([campaignId])
@@ -518,6 +525,18 @@ model Transaction {
   @@index([reference])
   @@index([createdAt])
   @@map("transactions")
+}
+
+model RefundRequest {
+  id                String              @id @default(cuid())
+  bookingId         String
+  status            RefundStatus
+  amount            Decimal             @db.Decimal(10, 2)
+  createdAt         DateTime            @default(now())
+
+  booking           Booking @relation(fields: [bookingId], references: [id])
+
+  @@map("refund_requests")
 }
 
 // Campaign Analytics
