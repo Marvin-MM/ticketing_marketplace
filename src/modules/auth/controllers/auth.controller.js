@@ -1218,9 +1218,9 @@ export const managerLogin = async (req, res) => {
         permissions: manager.permissions,
         sellerId: manager.sellerId,
       },
-      // For mobile apps that might struggle with cookies, 
-      // it's sometimes helpful to return the session ID in body as fallback
-      // sessionId: sessionId 
+    // FOR MOBILE APPS
+      sessionId: sessionId,
+      refreshTokenId: refreshTokenId,
     },
   });
 };

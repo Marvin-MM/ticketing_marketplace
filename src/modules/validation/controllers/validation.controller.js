@@ -891,21 +891,63 @@ import {
 /**
  * Main Entry Point: Validate a Ticket (QR Scan)
  */
-export const validateQRCode = async (req, res) => {
-  const { qrData, location } = req.body;
+// export const validateQRCode = async (req, res) => {
+//   const { QRCode, location } = req.body;
   
-  // We assume req.user is set by your Auth Middleware.
-  // If user is a MANAGER, req.user.role === 'MANAGER' and req.user.managerId exists
-  // If user is SELLER, req.user.role === 'SELLER' and req.user.id is the User ID.
+//   // We assume req.user is set by your Auth Middleware.
+//   // If user is a MANAGER, req.user.role === 'MANAGER' and req.user.managerId exists
+//   // If user is SELLER, req.user.role === 'SELLER' and req.user.id is the User ID.
 
+//   const validatorInfo = {
+//     // If authenticated as Manager (via Auth module)
+//     managerId: req.user.role === 'MANAGER' ? req.user.managerAccount?.id : null,
+//     // If authenticated as Seller
+//     userId: req.user.role === 'SELLER' ? req.user.id : null,
+//   };
+
+//   if (!QRCode) throw new ValidationError('QR code data is required');
+
+//   const context = {
+//     location,
+//     ipAddress: req.ip,
+//     method: 'QR_SCAN'
+//   };
+
+//   try {
+//     const result = await validationService.validateTicketQR(QRCode, validatorInfo, context);
+//     res.status(200).json({ success: true, ...result });
+
+//   } catch (error) {
+//     // Let global error handler catch standard AppErrors
+//     logger.warn('Validation failed', { error: error.message, validator: validatorInfo });
+//     throw error;
+//   }
+// };
+
+export const validateQRCode = async (req, res) => {
+  // DEBUG LOGGING: Remove these after fixing the issue
+  console.log('--- SCAN REQUEST RECEIVED ---');
+  console.log('Request Body Keys:', Object.keys(req.body));
+  console.log('qrData Value:', req.body.qrData ? 'Present' : 'Missing');
+  console.log('QRCode Value:', req.body.QRCode ? 'Present' : 'Missing');
+
+  // FIX: Accept 'QRCode' (from Postman) OR 'qrData' (Standard)
+  const qrData = req.body.qrData || req.body.QRCode; 
+  const { location } = req.body;
+  
+  // Validation check
+  if (!qrData) {
+     // If we get here, check the console logs to see why both were missing
+     throw new ValidationError('QR code data is required');
+  }
+
+  // We assume req.user is set by your Auth Middleware.
   const validatorInfo = {
-    // If authenticated as Manager (via Auth module)
+    // If authenticated as Manager
     managerId: req.user.role === 'MANAGER' ? req.user.managerAccount?.id : null,
     // If authenticated as Seller
     userId: req.user.role === 'SELLER' ? req.user.id : null,
   };
-
-  if (!qrData) throw new ValidationError('QR code data is required');
 
   const context = {
     location,
@@ -918,12 +960,10 @@ export const validateQRCode = async (req, res) => {
     res.status(200).json({ success: true, ...result });
 
   } catch (error) {
-    // Let global error handler catch standard AppErrors
     logger.warn('Validation failed', { error: error.message, validator: validatorInfo });
     throw error;
   }
 };
-
 /**
  * Mobile App Dashboard: Simple Stats for the logged-in Scanner
  * "How many tickets have I scanned today?"
