@@ -89,8 +89,8 @@ const config = {
   security: {
     rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000, // 15 minutes
     rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS, 10) || 100,
-    corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
-    allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+    corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['https://ticketing-marketplace-client-3pex.vercel.app', 'http://localhost:3000'],
+    allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['https://ticketing-marketplace-client-3pex.vercel.app', 'http://localhost:3000'],
     encryption: {
       key: process.env.ENCRYPTION_KEY || 'change-this-32-character-key-now',
       algorithm: process.env.ENCRYPTION_ALGORITHM || 'aes-256-gcm',

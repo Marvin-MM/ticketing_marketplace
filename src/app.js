@@ -60,18 +60,18 @@ app.set('trust proxy', 1);
 // }));
 
 // CORS configuration
-// app.use(cors({
-//   origin: config.security.corsOrigin,
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-// }));
 app.use(cors({
-  origin: 'http://localhost:3000', // Your Next.js frontend URL
+  origin: config.security.corsOrigin,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
+// app.use(cors({
+//   origin: 'http://localhost:3000', // Your Next.js frontend URL
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+// }));
 
 // Compression middleware
 app.use(compression());
